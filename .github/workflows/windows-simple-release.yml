@@ -1,0 +1,88 @@
+name: Windows simple release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-simple-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@a7487c7e89a18df4991f7f222e4898a00d66ddda
+        with:
+          version: 11.11.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.23.1
+      - name: Validate package version and release tag
+        id: version
+        run: |
+          $version = node -p "JSON.parse(require('fs').readFileSync('package.json', 'utf8')).version"
+          if ($version -notmatch '^\d+\.\d+\.\d+$' -or $env:GITHUB_REF_NAME -ne "v$version") {
+            throw 'Tag must equal v<package.json version>, using a stable version.'
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run typecheck
+      - run: pnpm run lint
+      - run: pnpm run check:i18n
+      - name: Build and verify Windows installer and update files
+        run: pnpm run build:win:simple
+      - name: Check packaged application launches
+        run: pnpm run smoke:win-app
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: windows-release
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            release/${{ steps.version.outputs.version }}/ai-novel-writer-setup-${{ steps.version.outputs.version }}.exe
+            release/${{ steps.version.outputs.version }}/ai-novel-writer-setup-${{ steps.version.outputs.version }}.exe.blockmap
+            release/${{ steps.version.outputs.version }}/latest.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ github.ref_name }}
+      RELEASE_VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: windows-release
+          path: installer
+      - name: Publish installer after all build checks pass
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --json isDraft > release-state.json; then
+            test "$(jq -r .isDraft release-state.json)" = true || { echo 'Release already published; use a new version.'; exit 1; }
+          else
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "$RELEASE_TAG" \
+              --notes 'Windows x64 installer. Unsigned: Windows SmartScreen may show a warning. / Windows x64 安装程序。未签名，Windows SmartScreen 可能显示提示。'
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "installer/ai-novel-writer-setup-$RELEASE_VERSION.exe" \
+            "installer/ai-novel-writer-setup-$RELEASE_VERSION.exe.blockmap" \
+            installer/latest.yml --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

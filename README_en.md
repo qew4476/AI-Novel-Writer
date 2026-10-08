@@ -208,6 +208,17 @@ ai-novel-writer-mac-x64-<version>-installer.dmg
 
 ## Development and architecture documentation
 
+For a simplified Windows release, commit all changes and run `pnpm release:win`.
+The command reads the version from `package.json` and atomically pushes the current
+branch and `v<version>` tag to `origin`. GitHub Actions builds and checks the Windows
+x64 installer, checks application startup, then publishes a GitHub Release with the
+exe, `.exe.blockmap`, and `latest.yml`. Commit the new workflow before first use.
+This Windows-only route does not require the existing three-platform promotion
+process or an additional publishing token. Increase the package version for another
+release; re-run failed jobs in Actions if a build fails. Use
+`pnpm release:win --dry-run` to check without pushing. Follow the printed Actions
+link for build progress after the command returns.
+
 See [`docs/README.md`](docs/README.md) for documentation authority, ADRs, research, agent rules, and dated handoffs. The DeepSeek Harness plugin has its own [plugin documentation](plugins/dsh-ai-novel-writer/README.md) and does not define desktop behavior.
 
 ## License

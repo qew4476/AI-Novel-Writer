@@ -72,6 +72,9 @@ export default defineConfig({
     ],
   },
   build: {
+    // Vite's Lightning CSS minifier is incompatible with Tailwind's ESM cache
+    // loader on current Node releases. esbuild is Vite's supported alternative.
+    cssMinify: 'esbuild',
     rollupOptions: {
       onwarn(warning, defaultHandler) {
         // 过滤掉已知的无害警告

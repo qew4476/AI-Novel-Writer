@@ -200,6 +200,14 @@ ai-novel-writer-mac-x64-<版本号>-installer.dmg
 
 ## 开发与架构文档
 
+Windows 简化发布：先提交所有修改，再运行 `pnpm release:win`。命令读取
+`package.json` 的版本，原子推送当前分支与 `v<version>` 标签到 `origin`；
+GitHub Actions 构建 Windows x64 exe，检查安装包与启动情况，然后发布 GitHub Release，
+附带 `.exe.blockmap` 和 `latest.yml` 更新文件。首次使用需将新增工作流一起提交。
+此流程只发布 Windows，不要求原有三平台资格提升；无需额外配置发布 token。
+版本已发布时请提高 `package.json` 版本；构建失败时在 Actions 页面重新运行失败任务。
+`pnpm release:win --dry-run` 可预检而不推送。命令返回后可在输出的 Actions 链接查看进度。
+
 文档权威层级、ADR、调研、Agent 规则和任务交接入口见 [`docs/README.md`](docs/README.md)。DeepSeek Harness 插件拥有独立的[插件说明](plugins/dsh-ai-novel-writer/README.md)，不作为桌面版行为的来源。
 
 ## 许可证

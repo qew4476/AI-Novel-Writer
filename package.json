@@ -24,6 +24,8 @@
     "build:win": "pnpm run release:win:verify",
     "build:win:artifacts": "node scripts/require-release-gate.mjs && pnpm run rebuild:electron && tsc && vite build && electron-builder --win --x64 --publish never",
     "release:win:verify": "node scripts/release-win-verify.mjs",
+    "release:win": "node scripts/publish-windows-release.mjs",
+    "build:win:simple": "pnpm run clean:build && pnpm run rebuild:electron && pnpm run build && electron-builder --win --x64 --publish never && pnpm run verify:win-update-artifacts && pnpm run verify:win-package",
     "build:win-dir": "pnpm run clean:build && pnpm run typecheck && pnpm run rebuild:electron && vite build && electron-builder --win dir --x64 && pnpm run verify:win-package",
     "build:mac:artifacts": "pnpm run build:mac:arm64:artifacts",
     "build:mac:arm64:artifacts": "pnpm run clean:build && pnpm run typecheck && pnpm run rebuild:electron && clang -fobjc-arc -framework Foundation electron/security/darwin-safe-file-system.m -o electron/security/darwin-safe-file-system && chmod +x electron/security/darwin-safe-file-system && vite build && node scripts/build-release-vector-smoke-runner.mjs && electron-builder --mac --arm64 --publish never",
