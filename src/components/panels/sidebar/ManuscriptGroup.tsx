@@ -1,3 +1,4 @@
+import { UnsavedBadge } from './UnsavedBadge'
 /**
  * ManuscriptGroup — 正文章节折叠组（已定稿章节列表）
  */
@@ -287,6 +288,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
         }
         <PenTool size={14} style={{ color: 'var(--color-text-muted)' }} />
         <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('正文章节', 'Manuscript chapters')}</span>
+        <UnsavedBadge filePaths={chapterFiles.map(f => f.path)} />
         {chapterFiles.length > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
             {text(`${chapterFiles.length} 章`, `${chapterFiles.length} chapters`)}
@@ -379,6 +381,7 @@ export default function ManuscriptGroup({ files, projectPath }: { files: Manuscr
                   <span className="text-sm truncate flex-1" style={{ color: 'var(--color-text-secondary)' }}>
                     {displayName}
                   </span>
+                  <UnsavedBadge filePaths={[f.path]} />
                   <button
                     type="button"
                     className="opacity-70 hover:opacity-100 rounded p-0.5"

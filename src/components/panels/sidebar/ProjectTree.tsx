@@ -20,6 +20,7 @@ import ClearProjectDataDialog from '../../dialogs/ClearProjectDataDialog'
 
 
 
+import { UnsavedBadge } from './UnsavedBadge'
 import { LeafItem } from './SidebarShared'
 import { ARCH_FILES } from './sidebar-arch-files'
 import {
@@ -282,6 +283,7 @@ export default function ProjectTree() {
 
       {/* 1. 小说配置 */}
       <LeafItem
+        unsavedFilter={{ types: ['config'] }}
         iconName="book-open"
         label={text('小说配置', 'Novel configuration')}
         desc={text('基础参数与写作要求', 'Core parameters and writing guidance')}
@@ -303,6 +305,7 @@ export default function ProjectTree() {
 
       {/* 3. 章节蓝图 — 点击打开编辑器页 */}
       <LeafItem
+        unsavedFilter={{ types: ['chapter-card'] }}
         iconName="layout-list"
         label={text('章节蓝图', 'Chapter blueprints')}
         desc={text('AI 生成的章节目录，可编辑', 'Editable AI-generated chapter plans')}
@@ -327,6 +330,7 @@ export default function ProjectTree() {
       />
 
       <LeafItem
+        unsavedFilter={{ types: ['narrative-thread'] }}
         iconName="git-branch"
         label={text('伏笔与叙事线索', 'Foreshadowing & narrative threads')}
         desc={text('规划埋设/回收章节，自动注入写作并提示逾期', 'Plan setup/payoff chapters, inject active threads, and flag overdue ones')}
@@ -379,6 +383,7 @@ function WorldBuildingGroup({
         </span>
         <FolderTree size={14} style={{ color: 'var(--color-text-muted)' }} />
         <span className="text-sm font-medium flex-1 min-w-0 truncate" style={{ color: 'var(--color-text)' }}>{text('故事架构', 'Story architecture')}</span>
+        <UnsavedBadge types={['world-building', 'character']} filePaths={ARCH_FILES.map(f => `vela://core/${f.key}`)} />
         {/* 进度徽章 */}
         <span
           className="text-[0.7rem] flex-shrink-0 ml-1"
@@ -506,6 +511,7 @@ function ArchFileRow({
       >
         {label}
       </span>
+      <UnsavedBadge filePaths={[filePath]} types={isCharacterProjection ? ['character'] : []} />
       {!isGenerated && (
         <span className="text-[0.7rem] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
           {text('待生成', 'Pending')}

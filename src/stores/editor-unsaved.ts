@@ -78,3 +78,34 @@ export function countUnsavedEditorItemsForProject(
   }
   return dirtyItems.size
 }
+
+export interface UnsavedEditorFilter {
+  types?: readonly EditorTab['type'][]
+  filePaths?: readonly string[]
+  draftIds?: readonly number[]
+}
+
+/** Match visible resources and retained builtin drafts within one project. */
+export function hasUnsavedProjectEditorItems(
+  tabs: readonly EditorTab[],
+  draftLedgers: Readonly<Record<string, string>>,
+  projectKey: string,
+  filter: UnsavedEditorFilter,
+): boolean {
+  if (tabs.some(tab => tab.dirty && tab.projectKey === projectKey && (
+    filter.types?.includes(tab.type)
+    || (tab.filePath !== undefined && filter.filePaths?.includes(tab.filePath))
+    || (tab.draftId !== undefined && filter.draftIds?.includes(tab.draftId))
+  ))) return true
+
+  return Object.entries(draftLedgers).some(([key, content]) => {
+    if (!filter.types?.includes(LEDGER_TYPE_BY_KEY[key]) || !content) return false
+    try {
+      const parsed = JSON.parse(content) as { projects?: Array<{ projectKey?: unknown }> }
+      return Array.isArray(parsed.projects)
+        && parsed.projects.some(project => project.projectKey === projectKey)
+    } catch {
+      return false
+    }
+  })
+}

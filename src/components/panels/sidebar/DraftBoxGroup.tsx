@@ -1,3 +1,4 @@
+import { UnsavedBadge } from './UnsavedBadge'
 /**
  * DraftBoxGroup — 草稿箱折叠组（含章节分组和单条草稿条目）
  */
@@ -63,6 +64,7 @@ export default function DraftBoxGroup({
         }
         <FilePen size={14} style={{ color: 'var(--color-text-muted)' }} />
         <span className="text-sm font-medium" style={{ color: 'var(--color-text)' }}>{text('草稿箱', 'Draft box')}</span>
+        <UnsavedBadge draftIds={Object.values(draftsByChapter).flat().map(d => d.id)} />
         {activeChapterCount > 0 && (
           <span className="ml-auto text-[0.7rem]" style={{ color: 'var(--color-text-muted)' }}>
             {text(`${activeChapterCount} 章`, `${activeChapterCount} chapters`)}
@@ -161,6 +163,7 @@ function DraftChapterGroup({
         <span className="text-sm flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
           {displayTitle}
         </span>
+        <UnsavedBadge draftIds={drafts.map(d => d.id)} />
         <span className="ml-auto text-[0.7rem] flex-shrink-0" style={{ color: 'var(--color-text-muted)' }}>
           {text(`${activeDrafts.length} 稿`, `${activeDrafts.length} drafts`)}
         </span>
@@ -354,6 +357,7 @@ function DraftItem({
       <span className="text-xs flex-1 truncate" style={{ color: 'var(--color-text-secondary)' }}>
         {text(`草稿_v${draft.version}`, `Draft_v${draft.version}`)}
       </span>
+      <UnsavedBadge draftIds={[draft.id]} filePaths={[draft.filePath]} />
       {/* 状态标签（始终显示） */}
       <span
         className="text-[0.7rem] flex-shrink-0"

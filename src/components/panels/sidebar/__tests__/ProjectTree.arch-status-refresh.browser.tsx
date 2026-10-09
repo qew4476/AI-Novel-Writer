@@ -6,6 +6,7 @@ import { globalEventBus } from '../../../../shared/event-bus'
 import type { ProjectData } from '../../../../shared/ipc-channels'
 import { setActiveProjectSessionContext } from '../../../../shared/project-session-context'
 import { useDraftStore } from '../../../../stores/draft-store'
+import { useEditorStore } from '../../../../stores/editor-store'
 import { useLocaleStore } from '../../../../stores/locale-store'
 import { useProjectStore } from '../../../../stores/project-store'
 import { useWorkflowStore } from '../../../../stores/workflow-store'
@@ -33,6 +34,7 @@ const project: ProjectData = {
 }
 
 const originalDraftState = useDraftStore.getState()
+const originalEditorState = useEditorStore.getState()
 const originalLocaleState = useLocaleStore.getState()
 const originalProjectState = useProjectStore.getState()
 const originalWorkflowState = useWorkflowStore.getState()
@@ -46,6 +48,7 @@ let blueprintCount = 0
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 beforeEach(() => {
+  useEditorStore.setState({ tabs: [], draftLedgers: {}, activeTabId: null })
   synopsis = ''
   blueprintCount = 0
   useLocaleStore.setState({ locale: 'en-US', initialized: true })
@@ -106,6 +109,7 @@ afterEach(async () => {
   Reflect.deleteProperty(window, 'velaAPI')
   setActiveProjectSessionContext(null)
   useDraftStore.setState(originalDraftState)
+  useEditorStore.setState(originalEditorState)
   useLocaleStore.setState(originalLocaleState)
   useProjectStore.setState(originalProjectState)
   useWorkflowStore.setState(originalWorkflowState)
@@ -113,6 +117,31 @@ afterEach(async () => {
 })
 
 describe('ProjectTree architecture status refresh', () => {
+  it('shows dirty resources and their collapsed parent, then clears them on save', async () => {
+    await act(async () => root.render(<ProjectTree />))
+    await act(async () => useEditorStore.getState().openFile({
+      id: 'premise-test', name: 'Premise', type: 'arch-file', projectKey: PROJECT_PATH,
+      filePath: 'vela://core/premise', content: 'saved', savedContent: 'saved',
+    }))
+    await act(async () => useEditorStore.getState().updateTabContent('premise-test', 'edited'))
+    const row = (name: string) => Array.from(container.querySelectorAll('.tree-item'))
+      .find(element => element.textContent?.startsWith(name))!
+    expect(row('Premise').textContent).toContain('Unsaved')
+    expect(row('Story architecture').textContent).toContain('Unsaved')
+    await act(async () => (row('Story architecture').firstElementChild as HTMLElement).click())
+    expect(row('Story architecture').textContent).toContain('Unsaved')
+    expect(container.textContent).not.toContain('Premise')
+    await act(async () => useEditorStore.getState().markTabSaved('premise-test', 'edited'))
+    expect(container.textContent).not.toContain('Unsaved')
+
+    await act(async () => useEditorStore.getState().setDraftLedger('config', JSON.stringify({
+      projects: [{ projectKey: PROJECT_PATH }],
+    })))
+    expect(row('Novel configuration').textContent).toContain('Unsaved')
+    await act(async () => useEditorStore.getState().setDraftLedger('config', ''))
+    expect(row('Novel configuration').textContent).not.toContain('Unsaved')
+  })
+
   it('reflects a committed architecture file event without waiting for another workflow state change', async () => {
     await act(async () => root.render(<ProjectTree />))
 
