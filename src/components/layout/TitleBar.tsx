@@ -1,5 +1,5 @@
 import { localize as localeText } from '../../i18n/core'
-import { useEffect, useState, type CSSProperties, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type CSSProperties, type MouseEvent } from 'react'
 import {
   Archive,
   CheckCircle2,
@@ -11,6 +11,7 @@ import {
   Minus,
   Moon,
   ScrollText,
+  Save,
   Settings,
   Sparkles,
   Square,
@@ -67,6 +68,8 @@ export default function TitleBar() {
   const openImportNovel = useLayoutStore(s => s.openImportNovel)
   const { locale, toggleLocale, t, text } = useLocaleStore()
   const [exitRequest, setExitRequest] = useState<{ requestId: string; workflowBlocked?: boolean } | null>(null)
+  const saveAllBusyRef = useRef(false)
+  const [saveAllBusy, setSaveAllBusy] = useState(false)
   const [exitBusy, setExitBusy] = useState(false)
   const [exitError, setExitError] = useState<string | null>(null)
 
@@ -146,6 +149,34 @@ export default function TitleBar() {
       setExitBusy(false)
     }
   }
+
+  const saveAll = useCallback(async () => {
+    if (saveAllBusyRef.current || exitBusy || exitRequest) return
+    saveAllBusyRef.current = true
+    setSaveAllBusy(true)
+    try {
+      await saveDirtyEditorChangesForExit(useProjectStore.getState().currentProject?.path)
+    } catch (error) {
+      await alertError(error instanceof Error ? error.message : String(error), {
+        title: text('全部保存失败', 'Could not save all'),
+      })
+    } finally {
+      saveAllBusyRef.current = false
+      setSaveAllBusy(false)
+    }
+  }, [exitBusy, exitRequest, text])
+
+  useEffect(() => {
+    const handleSaveAll = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || !event.altKey || event.shiftKey
+        || event.key.toLowerCase() !== 's') return
+      event.preventDefault()
+      event.stopImmediatePropagation()
+      if (!event.repeat) void saveAll()
+    }
+    window.addEventListener('keydown', handleSaveAll, true)
+    return () => window.removeEventListener('keydown', handleSaveAll, true)
+  }, [saveAll])
 
   const ThemeIcon = themeIcons[theme] || Sun
   const cycleTheme = (e: MouseEvent) => {
@@ -262,6 +293,16 @@ export default function TitleBar() {
           <CheckCircle2 size={14} strokeWidth={1.9} />
           {hasDirty ? t('save.modified') : t('save.saved')}
         </span>
+
+        <button
+          className="writer-command-button"
+          title={text('保存全部修改 (Ctrl+Alt+S / Cmd+Option+S)', 'Save all changes (Ctrl+Alt+S / Cmd+Option+S)')}
+          disabled={saveAllBusy || exitBusy || exitRequest !== null || !hasDirty}
+          onClick={() => void saveAll()}
+        >
+          <Save size={14} strokeWidth={1.75} />
+          {saveAllBusy ? text('保存中...', 'Saving...') : text('全部保存', 'Save all')}
+        </button>
 
         <div className="writer-command-divider h-5 w-px" />
 

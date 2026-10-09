@@ -76,6 +76,38 @@ afterEach(async () => {
 })
 
 describe('TitleBar native exit settlement', () => {
+  it('saves all from the shortcut and toolbar without requesting exit, and prevents overlapping saves', async () => {
+    useEditorStore.setState({
+      tabs: [{ id: 'draft-a', name: 'Draft', type: 'chapter', projectKey: PROJECT, dirty: true }],
+    })
+    const pending = deferred<void>()
+    const save = vi.fn(async () => {
+      await pending.promise
+      useEditorStore.getState().markTabSaved('draft-a')
+    })
+    const unregister = registerEditorExitSaveHandler({ tabId: 'draft-a', type: 'chapter', projectKey: PROJECT, save })
+    try {
+      await act(async () => root.render(<TitleBar />))
+      const shortcut = () => window.dispatchEvent(new KeyboardEvent('keydown', {
+        key: 's', ctrlKey: true, altKey: true, bubbles: true, cancelable: true,
+      }))
+      await act(async () => { shortcut(); shortcut() })
+      expect(save).toHaveBeenCalledTimes(1)
+      await expect.element(page.getByRole('button', { name: '保存中...' })).toBeDisabled()
+      await act(async () => pending.resolve())
+      expect(useEditorStore.getState().tabs[0]?.dirty).toBe(false)
+      await act(async () => useEditorStore.setState({
+        tabs: [{ id: 'draft-a', name: 'Draft', type: 'chapter', projectKey: PROJECT, dirty: true }],
+      }))
+      await act(async () => page.getByRole('button', { name: '全部保存', exact: true }).click())
+      expect(save).toHaveBeenCalledTimes(2)
+      expect(invoke).not.toHaveBeenCalled()
+      await expect.element(page.getByRole('dialog')).not.toBeInTheDocument()
+    } finally {
+      unregister()
+    }
+  })
+
   it('lets a clean system close proceed without prompting', async () => {
     await act(async () => root.render(<TitleBar />))
 
