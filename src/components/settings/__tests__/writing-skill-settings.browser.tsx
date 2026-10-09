@@ -72,6 +72,51 @@ afterEach(async () => {
 })
 
 describe('writing skill settings', () => {
+  it('installs pasted content after confirmation and clears the input', async () => {
+    const content = '---\nname: typed-prose\ndescription: Prose rules\n---\nWrite concrete actions.'
+    const input = page.getByRole('textbox', { name: 'Writing skill content' })
+    const install = page.getByRole('button', { name: 'Install entered skill' })
+    await expect.element(install).toBeDisabled()
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:install-content'
+      ? { success: true, skill: { name: 'typed-prose' } }
+      : ipcResult(channel))
+    await act(async () => {
+      await input.fill(content)
+      await install.click()
+    })
+    await expect.element(page.getByRole('dialog')).toBeVisible()
+    expect(invoke).not.toHaveBeenCalledWith('skills:install-content', expect.anything())
+    await act(async () => page.getByRole('button', { name: 'Confirm', exact: true }).click())
+    await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('skills:install-content', content))
+    await expect.element(input).toHaveValue('')
+    await expect.element(install).toBeDisabled()
+  })
+
+  it('retains pasted content when installation fails', async () => {
+    const content = 'Write concrete actions.'
+    invoke.mockImplementation(async (channel: string) => channel === 'skills:install-content'
+      ? { success: false, error: 'A skill with this name is already installed' }
+      : ipcResult(channel))
+    await act(async () => {
+      await page.getByRole('textbox', { name: 'Writing skill content' }).fill(content)
+      await page.getByRole('button', { name: 'Install entered skill' }).click()
+    })
+    await act(async () => page.getByRole('button', { name: 'Confirm', exact: true }).click())
+    await expect.element(page.getByRole('alert')).toHaveTextContent('A skill with this name is already installed')
+    await expect.element(page.getByRole('textbox', { name: 'Writing skill content' })).toHaveValue(content)
+  })
+
+  it('keeps pasted content and performs no installation when cancelled', async () => {
+    await act(async () => {
+      await page.getByRole('textbox', { name: 'Writing skill content' }).fill('Write concrete actions.')
+      await page.getByRole('button', { name: 'Install entered skill' }).click()
+    })
+    await act(async () => page.getByRole('button', { name: 'Cancel' }).click())
+    await vi.waitFor(() => expect(page.getByRole('dialog').query()).toBeNull())
+    expect(invoke).not.toHaveBeenCalledWith('skills:install-content', expect.anything())
+    await expect.element(page.getByRole('textbox', { name: 'Writing skill content' })).toHaveValue('Write concrete actions.')
+  })
+
   it('inspects a GitHub candidate before offering installation', async () => {
     await act(async () => {
       await page.getByLabelText('GitHub skill URL').fill('https://github.com/acme/scene-craft')

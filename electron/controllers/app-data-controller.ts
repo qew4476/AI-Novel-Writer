@@ -326,6 +326,47 @@ export function registerAppDataController(): void {
     }
   })
 
+  ipcMain.handle('skills:install-content', async (_event, raw: string) => {
+    try {
+      if (typeof raw !== 'string' || !raw.trim()) {
+        throw new Error(text('Skill 内容必须是非空文字', 'Skill content must be non-empty text'))
+      }
+      if (Buffer.byteLength(raw, 'utf8') > MAX_WRITING_SKILL_BYTES) {
+        throw new Error(text('SKILL.md 超过 64 KiB', 'SKILL.md is larger than 64 KiB'))
+      }
+      const inspection = inspectWritingSkillMarkdown(raw)
+      if (!inspection.content.trim()) {
+        throw new Error(text('Skill 缺少写作指令', 'The Skill has no writing instructions'))
+      }
+      if (!inspection.compatible) {
+        throw new Error(text(
+          `该 Skill 不是自包含提示词：${inspection.reasons.join(', ')}`,
+          `This is not a self-contained prompt skill: ${inspection.reasons.join(', ')}`,
+        ))
+      }
+      const requestedDirectory = writingSkillDirectory(inspection.metadata.name)
+      if (fs.existsSync(requestedDirectory)) {
+        throw new Error(text(
+          `同名 Writing Skill 已安装：${inspection.metadata.name}`,
+          `A Writing Skill with this name is already installed: ${inspection.metadata.name}`,
+        ))
+      }
+      const { filePath } = ensureOwnedSkillTarget(inspection.metadata.name)
+      fs.writeFileSync(filePath, raw, { encoding: 'utf8', mode: 0o600, flag: 'wx' })
+      const skill: InstalledWritingSkill = {
+        name: inspection.metadata.name,
+        source: 'user',
+        version: inspection.metadata.version,
+        language: inspection.metadata.language,
+        compatible: true,
+        utf8Bytes: inspection.utf8Bytes,
+      }
+      return { success: true, skill }
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
   ipcMain.handle('skills:install-github', async (_event, sourceUrl: string) => {
     try {
       if (typeof sourceUrl !== 'string' || sourceUrl.length > 2_048) {

@@ -571,6 +571,10 @@ export interface AppDataChannels {
     args: [sourceUrl: string]
     return: { success: boolean; inspection?: import('./writing-skills').RemoteWritingSkillInspection; error?: string }
   }
+  'skills:install-content': {
+    args: [content: string]
+    return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }
+  }
   'skills:install-github': {
     args: [sourceUrl: string]
     return: { success: boolean; skill?: import('./writing-skills').InstalledWritingSkill; error?: string }

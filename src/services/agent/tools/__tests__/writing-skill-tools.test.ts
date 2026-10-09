@@ -50,7 +50,7 @@ describe('writing skill agent tools', () => {
     expect(invoke).toHaveBeenCalledWith('skills:inspect-github', 'https://github.com/acme/skill')
   })
 
-  it('makes installation an explicit confirmation write and only accepts a source URL', async () => {
+  it('makes installation an explicit confirmation write and accepts a source URL', async () => {
     invoke
       .mockResolvedValueOnce({ success: true, skill: { name: 'scene-craft', source: 'user' } })
       .mockResolvedValueOnce([])
@@ -58,12 +58,38 @@ describe('writing skill agent tools', () => {
     expect(installWritingSkillTool.requiresConfirmation).toBe(true)
     expect(installWritingSkillTool.inputSchema.properties).toEqual({
       source_url: expect.objectContaining({ type: 'string' }),
+      content: expect.objectContaining({ type: 'string' }),
     })
     await expect(installWritingSkillTool.execute({
       source_url: 'https://github.com/acme/skill',
-      content: 'forged prompt',
     })).resolves.toMatchObject({ success: true })
     expect(invoke).toHaveBeenNthCalledWith(1, 'skills:install-github', 'https://github.com/acme/skill')
+  })
+
+  it('installs supplied text and reloads the registry', async () => {
+    invoke.mockResolvedValueOnce({ success: true, skill: { name: 'typed-prose' } }).mockResolvedValueOnce([])
+    const { installWritingSkillTool } = await import('../install-writing-skill.tool')
+    const content = '---\nname: typed-prose\ndescription: Prose\n---\nWrite concrete action.'
+    await expect(installWritingSkillTool.execute({ content })).resolves.toMatchObject({ success: true })
+    expect(invoke).toHaveBeenNthCalledWith(1, 'skills:install-content', content)
+    expect(invoke).toHaveBeenNthCalledWith(2, 'skills:list-user')
+  })
+
+  it.each([{}, { content: '' }, { content: 42 }, { source_url: '', content: 'text' },
+    { source_url: 'https://github.com/acme/skill', content: 'text' }])('rejects invalid or ambiguous input %j', async (args) => {
+    const { installWritingSkillTool } = await import('../install-writing-skill.tool')
+    await expect(installWritingSkillTool.execute(args)).resolves.toMatchObject({ success: false })
+    expect(invoke).not.toHaveBeenCalled()
+  })
+
+  it('does not install text after cancellation', async () => {
+    const { installWritingSkillTool } = await import('../install-writing-skill.tool')
+    const controller = new AbortController()
+    controller.abort()
+    await expect(installWritingSkillTool.execute({ content: 'text' }, {
+      projectSession, selectedModelId: null, uiLocale: 'zh-CN', writingLanguage: 'zh-CN', abortSignal: controller.signal,
+    })).resolves.toMatchObject({ success: false })
+    expect(invoke).not.toHaveBeenCalled()
   })
 
   it('binds a compatible installed skill to one confirmed project stage', async () => {

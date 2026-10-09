@@ -17,6 +17,7 @@ import {
 } from '../../services/agent/writing-skill-bindings'
 import { Button } from '../ui/Button'
 import { Input } from '../ui/Input'
+import { Textarea } from '../ui/Textarea'
 import { NativeSelect } from '../ui/NativeSelect'
 import { confirm as confirmAction } from '../ui/Confirm'
 
@@ -103,6 +104,7 @@ export default function SkillSettings() {
   const [skills, setSkills] = useState<LoadedSkill[]>([])
   const [bindings, setBindings] = useState<Partial<Record<WritingSkillStage, string>>>({})
   const [sourceUrl, setSourceUrl] = useState('')
+  const [skillContent, setSkillContent] = useState('')
   const [inspection, setInspection] = useState<RemoteWritingSkillInspection | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -172,6 +174,27 @@ export default function SkillSettings() {
     }
   }
 
+  const installContent = async () => {
+    const content = skillContent
+    if (busy || !content.trim()) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (!await confirmAction(text(
+        '确认将输入的 SKILL.md 安装到全局写作 Skill 库？内容会在安装前验证，同名 Skill 不会被覆盖。',
+        'Install the supplied SKILL.md in the global writing skill library? Its content will be validated before installation. Existing skills will not be overwritten.',
+      ), { title: text('安装写作 Skill', 'Install writing skill') })) return
+      const result = await ipc.invoke('skills:install-content', content)
+      if (!result.success) throw new Error(result.error || text('Skill 安装失败', 'Skill installation failed'))
+      await reload()
+      setSkillContent('')
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const updateBinding = async (stage: WritingSkillStage, skillId: string) => {
     if (!projectSession) return
     setBusy(true)
@@ -219,6 +242,29 @@ export default function SkillSettings() {
 
   return (
     <div className="space-y-5">
+      <section className="space-y-2" aria-labelledby="writing-skill-content-title">
+        <h3 id="writing-skill-content-title" className="text-sm font-semibold text-[var(--color-text)]">
+          {text('直接输入写作 Skill', 'Enter a writing skill directly')}
+        </h3>
+        <p id="writing-skill-content-help" className="text-xs leading-5 text-[var(--color-text-muted)]">
+          {text('粘贴完整的 SKILL.md，包含 name、description 元数据和写作指令。仅支持自包含提示词，最多 64 KiB。安装后可在下方绑定项目阶段。', 'Paste a complete SKILL.md with name and description frontmatter and writing instructions. Only self-contained prompts up to 64 KiB are supported. After installation, bind it to a project stage below.')}
+        </p>
+        <Textarea
+          value={skillContent}
+          onChange={event => setSkillContent(event.target.value)}
+          aria-label={text('写作 Skill 内容', 'Writing skill content')}
+          aria-describedby="writing-skill-content-help"
+          placeholder={text('---\nname: my-writing-skill\ndescription: 我的写作规则\n---\n在这里输入写作指令。', '---\nname: my-writing-skill\ndescription: My writing rules\n---\nEnter writing instructions here.')}
+          rows={7}
+          disabled={busy}
+          className="resize-y font-mono text-xs"
+        />
+        <Button onClick={installContent} disabled={busy || !skillContent.trim()}>
+          <Download size={13} />
+          {text('安装输入的 Skill', 'Install entered skill')}
+        </Button>
+      </section>
+      {error && <p role="alert" className="text-xs text-[var(--color-error-text)]">{error}</p>}
       <section className="space-y-2" aria-labelledby="writing-skill-source-title">
         <div>
           <h3 id="writing-skill-source-title" className="text-sm font-semibold text-[var(--color-text)]">
@@ -274,7 +320,6 @@ export default function SkillSettings() {
             </div>
           </div>
         )}
-        {error && <p role="alert" className="text-xs text-[var(--color-error-text)]">{error}</p>}
       </section>
 
       <section className="space-y-3" aria-labelledby="writing-skill-bindings-title">

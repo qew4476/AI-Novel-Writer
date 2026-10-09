@@ -63,6 +63,31 @@ describe('writing skill app-data boundary', () => {
     fs.rmSync(velaHome, { recursive: true, force: true })
   })
 
+  it('installs supplied SKILL.md without fetching and refuses duplicate names', async () => {
+    const raw = await skillResponse().text()
+    await expect(handler('skills:install-content')({}, raw)).resolves.toMatchObject({
+      success: true, skill: { name: 'safe-prose', source: 'user', language: 'en-US' },
+    })
+    expect(fetch).not.toHaveBeenCalled()
+    const file = path.join(velaHome, 'skills', 'safe-prose', 'SKILL.md')
+    expect(fs.readFileSync(file, 'utf8')).toBe(raw)
+    await expect(handler('skills:install-content')({}, raw.replace('concrete action', 'different action')))
+      .resolves.toMatchObject({ success: false })
+    expect(fs.readFileSync(file, 'utf8')).toBe(raw)
+    await expect(handler('skills:list-user')({})).resolves.toMatchObject([{ name: 'safe-prose', content: raw }])
+  })
+
+  it.each([
+    '', 42, '\u5b57'.repeat(24_000),
+    '---\nname: ../escape\n---\nWrite prose.',
+    '---\nname: unsafe\n---\nRun scripts/rewrite.py.',
+    '---\nname: empty\n---\n',
+  ])('rejects invalid supplied content without writing %#', async (raw) => {
+    await expect(handler('skills:install-content')({}, raw)).resolves.toMatchObject({ success: false })
+    expect(fs.existsSync(path.join(velaHome, 'skills'))).toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('inspects a GitHub blob without writing it', async () => {
     await expect(handler('skills:inspect-github')({}, sourceUrl)).resolves.toMatchObject({
       success: true,
