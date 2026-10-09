@@ -110,7 +110,7 @@ export default function App() {
   const chapterCreationPrefill = useLayoutStore(s => s.chapterCreationPrefill)
   const closeChapterCreation = useLayoutStore(s => s.closeChapterCreation)
   const initLLM = useLLMStore((s) => s.init)
-  const loadRecentProjects = useProjectStore((s) => s.loadRecentProjects)
+  const restoreStartupProject = useProjectStore((s) => s.restoreStartupProject)
   const skinState = useSkinStore((s) => s.skinState)
   const skinBackgroundUrl = useSkinStore((s) => s.backgroundUrl)
   const initSkin = useSkinStore((s) => s.init)
@@ -122,7 +122,7 @@ export default function App() {
     initLocale()
     initTheme()
     initLLM()
-    loadRecentProjects()
+    void restoreStartupProject()
     // 初始化 MCP Store
     useMCPStore.getState().init().catch(e => console.warn('[MCP] 初始化失败:', e))
     if (ipc.isElectron) {
@@ -205,7 +205,7 @@ export default function App() {
       unsubActionToast()
       unsubAutoOpenNextChapter()
     }
-  }, [initLocale, initTheme, initLLM, loadRecentProjects])
+  }, [initLocale, initTheme, initLLM, restoreStartupProject])
 
   useEffect(() => {
     if (!ipc.isElectron) return undefined
@@ -213,16 +213,6 @@ export default function App() {
     return disposeSkin
   }, [disposeSkin, initSkin])
 
-  useEffect(() => {
-    if (!ipc.isElectron) return
-    void ipc.invoke('project:smoke-open-request').then(async (request) => {
-      if (!request) return
-      const opened = await useProjectStore.getState().openProject(request.projectPath)
-      if (!opened) throw new Error('烟测项目打开失败')
-      const confirmed = await ipc.invoke('project:smoke-open-confirm', request.projectPath)
-      if (!confirmed.success) throw new Error(confirmed.error || '烟测项目确认失败')
-    }).catch(error => console.error('[SmokeProjectOpen]', error))
-  }, [])
 
   // 全局快捷键: Cmd+N 新建项目，Cmd+O 打开项目
   // 注意：Cmd+=/- 缩放已由 TitleBar.tsx 统一处理，此处不重复注册

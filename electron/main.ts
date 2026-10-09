@@ -123,6 +123,7 @@ function publishUpdateState(state: UpdateState): void {
 
 function createWindow() {
   win = new BrowserWindow({
+    show: false,
     width: 1440,
     height: 900,
     minWidth: 1024,
@@ -139,6 +140,8 @@ function createWindow() {
       contextIsolation: true,
     },
   })
+  win.maximize()
+  win.once('ready-to-show', () => win?.show())
   installWindowCloseGuard(win)
 
   if (process.platform === 'darwin') {

@@ -16,6 +16,9 @@ const mocks = vi.hoisted(() => {
     }
     this.isDestroyed = () => false
     this.on = vi.fn()
+    this.once = vi.fn()
+    this.maximize = vi.fn(() => calls.push('maximize'))
+    this.show = vi.fn()
     this.setMenuBarVisibility = vi.fn()
     this.loadURL = vi.fn()
     this.loadFile = vi.fn()
@@ -120,6 +123,13 @@ describe('interactive Electron startup', () => {
     expect(mocks.calls.indexOf('ipc')).toBeLessThan(mocks.calls.indexOf('create-window'))
     expect(mocks.calls.indexOf('mcp')).toBeLessThan(mocks.calls.indexOf('create-window'))
     expect(mocks.windows[0]?.on).toHaveBeenCalledWith('close', expect.any(Function))
+    expect(mocks.BrowserWindow).toHaveBeenCalledWith(expect.objectContaining({ show: false }))
+    expect(mocks.windows[0]?.maximize).toHaveBeenCalledOnce()
+    const once = mocks.windows[0]?.once as ReturnType<typeof vi.fn>
+    const ready = once.mock.calls.find(([event]) => event === 'ready-to-show')![1]
+    expect(mocks.windows[0]?.show).not.toHaveBeenCalled()
+    ready()
+    expect(mocks.windows[0]?.show).toHaveBeenCalledOnce()
   })
 
   it('keeps the already-created window available when update startup fails', async () => {

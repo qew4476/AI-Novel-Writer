@@ -36,6 +36,7 @@ import {
 let refreshFileTreeRequestSequence = 0
 let openProjectRequestSequence = 0
 let recentProjectsRequestSequence = 0
+let startupProjectRestore: Promise<void> | null = null
 let closeProjectInFlight: Promise<boolean> | null = null
 let projectRecoveryInFlight: Promise<void> | null = null
 
@@ -331,6 +332,7 @@ interface ProjectState {
     expectedProjectSession?: ProjectSessionContext,
   ) => Promise<void>
   /** 加载最近项目 */
+  restoreStartupProject: () => Promise<void>
   loadRecentProjects: () => Promise<void>
   /** 只移除最近项目记录，不删除项目目录或数据 */
   removeRecentProject: (projectPath: string) => Promise<boolean>
@@ -760,6 +762,29 @@ export const useProjectStore = create<ProjectState>()((set, get) => ({
       || get().projectSessionEpoch !== projectSessionEpoch
     ) return
     set({ fileTree: tree })
+  },
+
+  restoreStartupProject: () => {
+    if (startupProjectRestore) return startupProjectRestore
+    const requestSequence = openProjectRequestSequence
+    startupProjectRestore = (async () => {
+      const smokeRequest = ipc.isElectron
+        ? await ipc.invoke('project:smoke-open-request')
+        : null
+      await get().loadRecentProjects()
+      // A manual open/create during startup always takes precedence.
+      if (requestSequence !== openProjectRequestSequence || get().currentProject || get().loading) return
+      const projectPath = smokeRequest?.projectPath ?? get().recentProjects[0]?.path
+      if (!projectPath) return
+      const opened = await get().openProject(projectPath)
+      if (smokeRequest && opened) {
+        const confirmed = await ipc.invoke('project:smoke-open-confirm', projectPath)
+        if (!confirmed.success) throw new Error('Startup project confirmation failed')
+      }
+    })().catch(() => {
+      // Keep the welcome screen available if startup metadata cannot be read.
+    })
+    return startupProjectRestore
   },
 
   loadRecentProjects: async () => {
