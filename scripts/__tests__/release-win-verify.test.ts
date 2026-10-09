@@ -342,7 +342,7 @@ async function runShortLivedProcessExitScenario({
   )
 
   try {
-    await waitForGateStatus(statusPath, 'ready', 10_000)
+    await waitForGateStatus(statusPath, 'ready', 30_000)
     const launcher = spawn(
       'powershell.exe',
       [

@@ -4,6 +4,13 @@ import { readFileSync } from 'node:fs'
 import { ensureElectronNativeBinding } from '../prepare-native-for-electron.mjs'
 
 describe('prepare native dependencies for Electron development', () => {
+  it('restores the host Node ABI before running unit tests after Electron development', () => {
+    const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
+
+    expect(packageJson.scripts.pretest).toBe('node scripts/prepare-native-for-node.mjs')
+    expect(packageJson.scripts.test).toBe('vitest run')
+  })
+
   it('runs the Electron ABI check before the development server', () => {
     const packageJson = JSON.parse(readFileSync('package.json', 'utf8'))
 
