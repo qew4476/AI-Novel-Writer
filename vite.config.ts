@@ -58,8 +58,11 @@ export default defineConfig({
     entries: ['index.html', 'src/**/*.{ts,tsx}']
   },
   test: {
+    // Browser and native integration suites spawn additional processes. Keep
+    // full-suite runs within a predictable memory and CPU budget.
+    maxWorkers: 4,
     // Test copy must not follow the operating-system locale of a CI runner.
-    setupFiles: ['test/setup-locale.ts'],
+    setupFiles: ['test/setup-main-config.ts', 'test/setup-locale.ts'],
     // 本地历史 worktree 和 pnpm 缓存可能包含旧版本测试；它们不是当前项目源码。
     exclude: [
       ...configDefaults.exclude,

@@ -202,6 +202,10 @@ function quotePowerShell(value: string): string {
   return `'${value.replaceAll("'", "''")}'`
 }
 
+// Node decodes captured output as UTF-8; Windows PowerShell otherwise uses the
+// host code page for redirected stdout, even when the script and JSON are UTF-8.
+const powerShellUtf8Output = '[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)'
+
 function runProbeLibrary(script: string): string {
   return execFileSync(
     'powershell.exe',
@@ -210,7 +214,7 @@ function runProbeLibrary(script: string): string {
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      `. ${quotePowerShell(probeScript)} -LoadProbeLibrary\n${script}`,
+      `${powerShellUtf8Output}\n. ${quotePowerShell(probeScript)} -LoadProbeLibrary\n${script}`,
     ],
     { encoding: 'utf8' },
   )
@@ -224,7 +228,8 @@ function runInstallerLibrary(script: string): string {
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      `$installer = (Get-Command powershell.exe).Source
+      `${powerShellUtf8Output}
+$installer = (Get-Command powershell.exe).Source
 . ${quotePowerShell(installerScript)} -InstallerPath $installer -InstallerTimeoutSeconds 12 -PostExitQuietSeconds 5 -LoadInstallerLibrary
 ${script}`,
     ],
@@ -240,7 +245,7 @@ function runReleaseMonitorLibrary(script: string): string {
       '-ExecutionPolicy',
       'Bypass',
       '-Command',
-      `. ${quotePowerShell(releaseMonitorScript)} -LoadMonitorLibrary\n${script}`,
+      `${powerShellUtf8Output}\n. ${quotePowerShell(releaseMonitorScript)} -LoadMonitorLibrary\n${script}`,
     ],
     { encoding: 'utf8' },
   )

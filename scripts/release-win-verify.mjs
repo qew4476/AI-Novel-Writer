@@ -68,6 +68,7 @@ const evidencePath = join(monitorRoot, 'evidence')
 const monitorProcessPath = join(monitorRoot, 'monitor-process.json')
 const monitorScript = resolve('scripts/monitor-win-release-gate.ps1')
 const launchGateScript = resolve('scripts/release-win-launch-gate.mjs')
+const packageManagerRunner = resolve('scripts/run-package-manager.mjs')
 // The monitor can spend five seconds draining live processes, then requires five quiet seconds.
 const MONITOR_STEP_COMPLETION_TIMEOUT_MS = 15_000
 const packageVersion = JSON.parse(readFileSync(resolve('package.json'), 'utf8')).version
@@ -545,7 +546,7 @@ async function waitForFinalQuietPeriod() {
 
 async function runPreMonitorSteps() {
   for (const step of releasePreMonitorSteps) {
-    await runNodeProcess([pnpmCli, 'run', step])
+    await runNodeProcess([packageManagerRunner, pnpmCli, 'run', step])
   }
 }
 
@@ -625,7 +626,7 @@ async function main() {
   await waitForMonitorState(['ready'], 10_000)
 
   for (const step of releaseVerificationSteps) {
-    const launch = spawnArmedNodeProcess(step, [pnpmCli, 'run', step])
+    const launch = spawnArmedNodeProcess(step, [packageManagerRunner, pnpmCli, 'run', step])
     const child = launch.child
     let result
     try {

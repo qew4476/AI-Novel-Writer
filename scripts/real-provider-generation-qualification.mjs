@@ -767,6 +767,10 @@ async function loadProductRuntime(repositoryRoot) {
       format: 'esm',
       platform: 'node',
       target: 'node20',
+      // CommonJS dependencies still need Node's require inside the data URL.
+      banner: {
+        js: `import { createRequire } from 'node:module'; const require = createRequire(${JSON.stringify(pathToFileURL(path.join(resolvedRoot, 'package.json')).href)});`,
+      },
       write: false,
       logLevel: 'silent',
     })

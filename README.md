@@ -21,14 +21,14 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer"><img src="https://badgen.net/badge/DSH%20plugin/0.1.0%20preview/blue" alt="DeepSeek Harness plugin 0.1.0 preview" /></a>
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
+  <a href="https://github.com/qew4476/AI-Novel-Writer/releases"><img src="https://badgen.net/github/tag/EthanYoQ/AI-Novel-Writer?label=release" alt="Release" /></a>
+  <a href="https://github.com/qew4476/AI-Novel-Writer/tree/master/plugins/dsh-ai-novel-writer"><img src="https://badgen.net/badge/DSH%20plugin/0.1.0%20preview/blue" alt="DeepSeek Harness plugin 0.1.0 preview" /></a>
+  <a href="https://github.com/qew4476/AI-Novel-Writer/blob/master/LICENSE"><img src="https://badgen.net/badge/license/GPL-3.0/blue" alt="GPL-3.0 License" /></a>
+  <a href="https://github.com/qew4476/AI-Novel-Writer/stargazers"><img src="https://badgen.net/github/stars/EthanYoQ/AI-Novel-Writer" alt="GitHub stars" /></a>
 </p>
 
 <p align="center">
-  <a href="https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest">下载桌面版（Windows / macOS）</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">安装 DeepSeek Harness Web 插件</a>
+  <a href="https://github.com/qew4476/AI-Novel-Writer/releases/latest">下载桌面版（Windows / macOS）</a> · <a href="https://www.npmjs.com/package/@ethanyoq/dsh-ai-novel-writer">安装 DeepSeek Harness Web 插件</a>
 </p>
 
 > **DeepSeek Harness 插件提示：** `0.1.0` 预览版目前冻结维护，短期不扩展功能；它的能力不足桌面软件版的 10%，不能替代桌面版。需要完整项目树、批量工作流、成熟编辑器或自动审校时，请使用上方的桌面版。
@@ -57,7 +57,7 @@
 - 中文长篇工作流串联蓝图、草稿、审稿、修订和定稿。
 - Windows 和 macOS 均可查看并启动适合本机的更新。
 
-1.0.0 的多草稿保存、旧请求覆盖、来源恢复、导出与安装检查修复继续保留；逐项说明见 [1.1.0 双语更新内容](.release/notes/v1.1.0.md)。正式安装包以 [GitHub Release](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 为准。
+1.0.0 的多草稿保存、旧请求覆盖、来源恢复、导出与安装检查修复继续保留；逐项说明见 [1.1.0 双语更新内容](.release/notes/v1.1.0.md)。正式安装包以 [GitHub Release](https://github.com/qew4476/AI-Novel-Writer/releases/latest) 为准。
 
 
 
@@ -171,7 +171,7 @@ Model:     你的 Ollama 模型名，例如 qwen3:14b
 ai-novel-writer-setup-<版本号>.exe
 ```
 
-1. 只从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载正式安装包。
+1. 只从 [GitHub Releases](https://github.com/qew4476/AI-Novel-Writer/releases/latest) 下载正式安装包。
 2. 安装程序更新应用本身，不应删除小说项目、角色卡或已有设置；仍建议在升级前自行备份重要作品。
 3. 安装后可在欢迎页使用“检查更新”；应用启动后也会按每日一次的成功检查频率静默检查。发现正式更新时先提示，只有用户点击“下载更新”后才开始下载；下载完成后再提供“立即重启更新 / 稍后”的选择。
 4. 旧版便携 ZIP 不能自行获得首个更新器版本，需要手动安装一次正式安装包；后续不再维护新的便携 ZIP。
@@ -180,7 +180,7 @@ ai-novel-writer-setup-<版本号>.exe
 
 ### macOS（Apple Silicon 与 Intel）
 
-从 [GitHub Releases](https://github.com/EthanYoQ/AI-Novel-Writer/releases/latest) 下载与你的 Mac 架构对应的安装包：
+从 [GitHub Releases](https://github.com/qew4476/AI-Novel-Writer/releases/latest) 下载与你的 Mac 架构对应的安装包：
 
 ```text
 ai-novel-writer-mac-arm64-<版本号>-installer.dmg

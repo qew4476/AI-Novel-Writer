@@ -141,3 +141,8 @@ pnpm build:win-dir
 ```
 
 It will build an executable file in release\win-unpacked\
+
+```cmd
+pnpm build:win   //build本地安裝檔
+
+```

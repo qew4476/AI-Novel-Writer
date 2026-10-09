@@ -1,6 +1,5 @@
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import type { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
-import { chatgptPlanAccessToken } from '../services/chatgpt-plan'
 
 type Event = { type?: string; delta?: string; response?: {
   usage?: { input_tokens?: number; output_tokens?: number; total_tokens?: number }
@@ -28,6 +27,7 @@ export class ChatgptPlanProvider implements ILLMProvider {
     let usage: TokenUsage | undefined
     let completed = false
     try {
+      const { chatgptPlanAccessToken } = await import('../services/chatgpt-plan')
       const input = messages.map(message => ({
         role: message.role === 'assistant' ? 'assistant' : message.role === 'user' ? 'user' : 'developer',
         content: message.content,

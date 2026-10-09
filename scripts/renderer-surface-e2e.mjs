@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { packageManagerCommand } from './package-manager-command.mjs'
 
 import { _electron as electron } from 'playwright'
 
@@ -226,8 +227,9 @@ function createIsolatedFixture() {
 
 function runProjectScript(scriptName) {
   const pnpmCli = process.env.npm_execpath
-  const command = pnpmCli ? (process.env.npm_node_execpath || process.execPath) : 'pnpm'
-  const args = pnpmCli ? [pnpmCli, 'run', scriptName] : ['run', scriptName]
+  const { command, args } = pnpmCli
+    ? packageManagerCommand(pnpmCli, ['run', scriptName], process.env.npm_node_execpath || process.execPath)
+    : { command: 'pnpm', args: ['run', scriptName] }
   const result = spawnSync(command, args, {
     cwd: repositoryRoot,
     env: process.env,
