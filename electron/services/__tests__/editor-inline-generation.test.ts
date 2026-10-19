@@ -39,7 +39,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   const owner = makeOwner('epoch-1')
   cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const reopenStorage = () => { owner.suspendForProjectClose(); db.close(); db = new Database(path.join(root, '.ai-novel', 'project.db')); deps.db = db; vi.mocked(getProjectDb).mockReturnValue(db); const next=makeOwner('epoch-2'); cleanup.unshift(()=>next.suspendForProjectClose()); return next }
-  return {get db(){return db},owner,spy,reopenStorage,changeTemplate:()=>{templateBody='后来模板 {{selected_text}}'},removeModel:()=>{model=null}}
+  return {root,get db(){return db},owner,spy,reopenStorage,changeTemplate:()=>{templateBody='后来模板 {{selected_text}}'},removeModel:()=>{model=null}}
 }
 
 import { createHash } from 'node:crypto'
@@ -86,4 +86,30 @@ it('取消后晚回调不回写，未发送取消拒绝dispatch',async()=>{
  const second=f.owner.beginEditorInline({...request,uiActionNonce:'第二作者动作'}).view.handle
  f.owner.cancel(second);await expect(f.owner.executeEditorInline(second)).rejects.toThrow()
  expect(f.spy).toHaveBeenCalledTimes(1)
+})
+
+
+it('freezes a one-off skill, instruction and manuscript without changing stage bindings', async () => {
+ const f = fixture()
+ const dir = path.join(f.root, 'skills', 'scene-craft')
+ fs.mkdirSync(dir, { recursive: true })
+ const skill = '---\nname: scene-craft\nlanguage: bilingual\nstage: refinement\n---\nKeep concrete scene movement.'
+ fs.writeFileSync(path.join(dir, 'SKILL.md'), skill)
+ const selection = { ...input, action: 'skill' as const, skillId: 'project:scene-craft', instruction: 'Preserve the ending.' }
+ const recovery = f.owner.beginEditorInline({ ...request, input: selection })
+ expect(recovery.context.skill?.content).toBe(skill)
+ expect(recovery.context.instruction).toBe(selection.instruction)
+ const { readEditorInlineTask } = await import('../editor-inline-generation')
+ const { GenerationRunRepository } = await import('../../repositories/generation-run-repository')
+ const repository = new GenerationRunRepository(() => f.db)
+ const task = readEditorInlineTask(repository.get(recovery.view.handle.runId))
+ expect(task.messages.map(message => message.content).join('\n')).toContain('Keep concrete scene movement.')
+ expect(task.messages.map(message => message.content).join('\n')).toContain('Preserve the ending.')
+ expect(task.messages.map(message => message.content).join('\n')).toContain(selection.documentText)
+ fs.writeFileSync(path.join(dir, 'SKILL.md'), skill + '\nChanged guidance.')
+ expect(f.owner.readEditorInlineRecovery(recovery.view.handle).context.skill?.content).toBe(skill)
+ expect(f.owner.readEditorInlineRecovery(recovery.view.handle).sourceStatus).toBe('conflict')
+ expect(fs.existsSync(path.join(f.root, 'writing-skills.json'))).toBe(false)
+ expect(() => f.owner.beginEditorInline({ ...request, uiActionNonce: 'missing-skill', input: { ...selection, skillId: 'project:missing' } })).toThrow()
+ expect(() => f.owner.beginEditorInline({ ...request, uiActionNonce: 'invalid-skill', input: { ...selection, skillId: 'project:../private' } })).toThrow()
 })

@@ -14,6 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { restoreNativeWithIndependentFallback } from './release-native-restore.mjs'
+import { resolveReleaseCommand } from './release-command.mjs'
 
 export const releasePreMonitorSteps = [
   'test',
@@ -87,7 +88,8 @@ function delay(milliseconds) {
 }
 
 function spawnNodeProcess(args) {
-  return observeChild(spawn(process.execPath, args, {
+  const invocation = resolveReleaseCommand(args)
+  return observeChild(spawn(invocation.command, invocation.args, {
     cwd: process.cwd(),
     stdio: 'inherit',
     windowsHide: true,
@@ -108,14 +110,15 @@ function createLaunchPaths(step) {
 
 function spawnArmedNodeProcess(step, args) {
   const paths = createLaunchPaths(step)
+  const invocation = resolveReleaseCommand(args)
   const child = observeChild(spawn(process.execPath, [
     launchGateScript,
     '--armed-path', paths.armedPath,
     '--release-path', paths.releasePath,
     '--result-path', paths.resultPath,
     '--',
-    process.execPath,
-    ...args,
+    invocation.command,
+    ...invocation.args,
   ], {
     cwd: process.cwd(),
     env: {

@@ -5,11 +5,16 @@ import { languages } from '@codemirror/language-data'
 import { EditorState, type Extension } from '@codemirror/state'
 import { openSearchPanel, closeSearchPanel, search } from '@codemirror/search'
 import { Sparkles, Bold, Check } from 'lucide-react'
+import { useProjectStore } from '../../stores/project-store'
+import { resolveWritingLanguage } from '../../shared/writing-language'
+import { skillRegistry, type LoadedSkill } from '../../services/agent/skill-registry'
+import { NativeSelect } from '../ui/NativeSelect'
 import { Button } from '../ui/Button'
 import { paragraphIndent } from './paragraph-indent'
 import { proseTab } from './prose-tab'
 import { useThemeStore } from '../../stores/theme-store'
 import type { MainGenerationRunHandle } from '../../services/generation/generation-runtime'
+import type { EditorInlineInput } from '../../shared/editor-inline-generation'
 import { createEditorInlineGeneration } from '../../services/editor-inline-generation'
 import { useLLMStore } from '../../stores/llm-store'
 import type { GenerationReasoningStage } from '../../shared/reasoning-types'
@@ -38,11 +43,13 @@ export type CodeMirrorEditorProps = {
 }
 
 type EditorAIAction = {
-  key: 'refine' | 'expand' | 'continue' | 'dialogue'
+  key: 'refine' | 'expand' | 'continue' | 'dialogue' | 'skill'
   label: readonly [string, string]
   prompt: readonly [string, string]
   reasoningStage: GenerationReasoningStage
 }
+
+const SKILL_ACTION: EditorAIAction = { key: 'skill', label: ['用 Skill 修改', 'Revise with skill'], prompt: ['', ''], reasoningStage: 'review' }
 
 const AI_ACTIONS = [
   { key: 'refine', label: ['润色', 'Refine'], prompt: ['润色这部分，使语言自然、具体并增强场景表现力。', 'Refine this passage for natural, specific language and stronger scene craft.'], reasoningStage: 'review' },
@@ -122,13 +129,29 @@ export default function CodeMirrorEditor({
   }, [content, onCharCountChange])
 
   // ===== Bubble Menu 逻辑 =====
+  const skillSelectionRef = useRef<{ input: Omit<EditorInlineInput, 'action'>; filePath?: string; sessionKey: string } | null>(null)
+  const [skillPickerOpen, setSkillPickerOpen] = useState(false)
+  const [inlineSkills, setInlineSkills] = useState<LoadedSkill[]>([])
+  const [inlineSkillId, setInlineSkillId] = useState('')
+  const [inlineInstruction, setInlineInstruction] = useState('')
+  const [skillLoadError, setSkillLoadError] = useState(false)
   const [bubbleOpen, setBubbleOpen] = useState(false)
+  const toolbarRef = useRef<HTMLDivElement>(null)
   const [bubblePos, setBubblePos] = useState({ top: 0, left: 0 })
   const [aiResult, setAiResult] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const [activeAIAction, setActiveAIAction] = useState<string | null>(null)
   const [loadingDots, setLoadingDots] = useState('.')
   const [selectionRange, setSelectionRange] = useState<{ from: number, to: number } | null>(null)
+  useLayoutEffect(() => {
+    const toolbar = toolbarRef.current
+    if (!toolbar || !bubbleOpen) return
+    const { width, height } = toolbar.getBoundingClientRect()
+    const left = Math.max(width / 2 + 8, Math.min(window.innerWidth - width / 2 - 8, bubblePos.left))
+    const searchBottom = editorRef.current?.view?.dom.querySelector('.cm-search')?.getBoundingClientRect().bottom ?? 0
+    const top = Math.max(height + searchBottom + 8, Math.min(window.innerHeight - 8, bubblePos.top))
+    if (left !== bubblePos.left || top !== bubblePos.top) setBubblePos({ left, top })
+  }, [bubbleOpen, bubblePos, skillPickerOpen, inlineSkills, aiResult, aiError])
   const aiRequestSequenceRef = useRef(0)
   const aiTargetRef = useRef<{
     requestSequence: number
@@ -167,7 +190,7 @@ export default function CodeMirrorEditor({
       const applicable = latest?.status === 'completed' && latest.compositionEligible === true && recovery.view.status !== 'cancelled' && recovery.sourceStatus === 'current'
       setAiError(applicable ? null : uiText('恢复的候选尚不可应用，可复制或继续原运行', 'The recovered candidate cannot be applied yet; copy it or continue the original run.'))
       setCanResumeAI(recovery.sourceStatus === 'current' && recovery.view.status !== 'cancelled' && recovery.view.ledger?.physicalRequests === 0 && candidates.length === 0)
-      setActiveAIAction(uiText(...AI_ACTIONS.find(action => action.key === target.action)!.label))
+      setActiveAIAction(uiText(...(target.action === 'skill' ? SKILL_ACTION : AI_ACTIONS.find(action => action.key === target.action)!).label))
       const view = editorRef.current?.view
       const from = Math.min(target.from, view?.state.doc.length ?? 0)
       setSelectionRange({ from, to: Math.min(target.to, view?.state.doc.length ?? 0) })
@@ -398,13 +421,15 @@ export default function CodeMirrorEditor({
       if (!session) throw new Error('EDITOR_INLINE_PROJECT_REQUIRED')
       const view = editorRef.current.view
       requestSequence = ++aiRequestSequenceRef.current
-      const input = { action: action.key, from: selectionRange.from, to: selectionRange.to,
-        selectedText: view.state.sliceDoc(selectionRange.from, selectionRange.to), documentText: view.state.doc.toString() }
+      if (action.key === 'skill' && (!skillSelectionRef.current || skillSelectionRef.current.filePath !== filePath || skillSelectionRef.current.sessionKey !== JSON.stringify(session) || skillSelectionRef.current.input.documentText !== view.state.doc.toString())) throw new Error('EDITOR_INLINE_SOURCE_CHANGED')
+      const input = { action: action.key, ...(action.key === 'skill' ? { skillId: inlineSkillId, instruction: inlineInstruction } : {}), from: selectionRange.from, to: selectionRange.to,
+        selectedText: view.state.sliceDoc(selectionRange.from, selectionRange.to), documentText: view.state.doc.toString(), ...(action.key === 'skill' ? skillSelectionRef.current!.input : {}) }
       aiTargetRef.current = { ...input, requestSequence, filePath, sessionKey: JSON.stringify(session) }
       inlineRef.current?.detach()
       const client = createEditorInlineGeneration(session)
       inlineRef.current = client
       aiCandidateRef.current = null
+      setSkillPickerOpen(false)
       setActiveAIAction(uiText(...action.label)); setAiResult(''); setAiError(null); setCanResumeAI(false)
       const recovery = await client.open({ input, modelId: useLLMStore.getState().defaultModelId ?? '', uiActionNonce: crypto.randomUUID() })
       if (requestSequence !== aiRequestSequenceRef.current) return
@@ -559,13 +584,14 @@ export default function CodeMirrorEditor({
       {/* 选区工具条：纸墨浮层，自带纸墨令牌与深浅色 */}
       {bubbleOpen && (editable || aiResult !== null) && bubblePos.top !== 0 && (
         <div
+          ref={toolbarRef}
           role="toolbar"
           aria-label={uiText('选中文字的操作', 'Actions for the selected text')}
           className="paper-ink cm-selbar"
           data-theme={inkThemeName}
-          data-preview={aiResult !== null || undefined}
-          style={{ top: bubblePos.top, left: bubblePos.left }}
-          onMouseDown={(e) => e.preventDefault()} // 防止编辑器失焦
+          data-preview={aiResult !== null || skillPickerOpen || undefined}
+          style={{ top: bubblePos.top, left: bubblePos.left, maxWidth: 'calc(100vw - 16px)', flexWrap: 'wrap' }}
+          onMouseDown={(e) => { if (!(e.target instanceof HTMLElement) || !e.target.closest('input, textarea, select')) e.preventDefault() }} // 防止编辑器失焦
         >
           {aiResult !== null ? (
             <div className="cm-selbar-preview">
@@ -596,6 +622,24 @@ export default function CodeMirrorEditor({
                 ><Check size={13} aria-hidden="true" />{uiText('替换', 'Replace')}</Button>
               </div>
             </div>
+          ) : skillPickerOpen ? (
+            <div className="cm-selbar-preview">
+              <label className="block text-sm">{uiText('本次写作 Skill', 'Writing skill for this revision')}
+                <NativeSelect aria-label={uiText('本次写作 Skill', 'Writing skill for this revision')} value={inlineSkillId} onChange={event => setInlineSkillId(event.target.value)}>
+                  <option value="">{uiText('请选择 Skill', 'Select a skill')}</option>
+                  {inlineSkills.map(skill => <option key={skill.skillId} value={skill.skillId}>{skill.writingSkill.metadata.displayName ?? skill.metadata.name}</option>)}
+                </NativeSelect>
+              </label>
+              {skillLoadError && <p role="alert">{uiText('Skill 加载失败，请重试', 'Could not load skills. Please try again.')}</p>}
+              {!skillLoadError && inlineSkills.length === 0 && <p>{uiText('暂无兼容 Skill，请在设置中导入写作 Skill', 'No compatible skills. Import a writing skill in Settings.')}</p>}
+              <label className="block text-sm">{uiText('本次修改要求（可选）', 'Revision instructions (optional)')}
+                <textarea aria-label={uiText('本次修改要求（可选）', 'Revision instructions (optional)')} className="w-full rounded border p-2 bg-[var(--color-panel)]" value={inlineInstruction} maxLength={8000} onChange={event => setInlineInstruction(event.target.value)} />
+              </label>
+              <div className="cm-selbar-actions">
+                <Button variant="secondary" size="sm" onClick={() => setSkillPickerOpen(false)}>{uiText('返回', 'Back')}</Button>
+                <Button variant="primary" size="sm" disabled={!inlineSkills.some(skill => skill.skillId === inlineSkillId)} onClick={() => handleAIAction(SKILL_ACTION)}>{uiText('生成修改', 'Generate revision')}</Button>
+              </div>
+            </div>
           ) : (
             <>
               {mode === 'document' && (
@@ -618,6 +662,13 @@ export default function CodeMirrorEditor({
                   <span className="cm-selbar-sep" aria-hidden="true" />
                 </>
               )}
+              <Button variant="text" size="sm" className="cm-selbar-tool" onClick={() => {
+                const view = editorRef.current?.view
+                if (!view || !selectionRange) return
+                skillSelectionRef.current = { input: { ...selectionRange, selectedText: view.state.sliceDoc(selectionRange.from, selectionRange.to), documentText: view.state.doc.toString() }, filePath, sessionKey: JSON.stringify(getActiveProjectSessionContext()) }
+                setSkillPickerOpen(true); setInlineSkills([]); setInlineSkillId(''); setSkillLoadError(false)
+                void skillRegistry.loadAll().then(() => setInlineSkills(skillRegistry.listAll().filter(skill => skill.writingSkill.compatible && ['bilingual', resolveWritingLanguage(useProjectStore.getState().currentProject?.novelConfig.writingLanguage)].includes(skill.writingSkill.metadata.language)))).catch(() => setSkillLoadError(true))
+              }}>{uiText(...SKILL_ACTION.label)}</Button>
               {AI_ACTIONS.map((action, index) => (
                 <Button key={action.key} variant="text" size="sm" className="cm-selbar-tool" onClick={() => handleAIAction(action)}>
                   {index === 0 && <Sparkles size={13} aria-hidden="true" />}

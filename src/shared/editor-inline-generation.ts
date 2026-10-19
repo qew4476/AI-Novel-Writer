@@ -3,7 +3,9 @@ import type { PromptTemplate } from '../services/builtin-prompt-templates'
 import type { WritingLanguage } from './writing-language'
 
 export interface EditorInlineInput {
-  action: 'refine' | 'expand' | 'continue' | 'dialogue'
+  action: 'refine' | 'expand' | 'continue' | 'dialogue' | 'skill'
+  skillId?: string
+  instruction?: string
   documentText: string
   from: number
   to: number
@@ -13,6 +15,7 @@ export interface EditorInlineContext extends EditorInlineInput {
   kind: 'author-draft'
   documentHash: string
   writingLanguage: WritingLanguage
+  skill?: { name: string; content: string }
   template: PromptTemplate
 }
 export interface EditorInlineRecovery {
