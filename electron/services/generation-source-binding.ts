@@ -529,6 +529,17 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
             fail('GENERATION_SKILL_INCOMPATIBLE');
         skills.push({ stage, identity: id, hash: hash(text) });
     }
+    let inlineSkill: { name: string; content: string } | undefined;
+    if (editorInlineInput?.action === 'skill') {
+        const id = editorInlineInput.skillId!;
+        const [scope, name] = id.split(':');
+        const text = scope === 'builtin' ? deps.readBuiltinSkill?.(name, facts.language) : observe(scope === 'project' ? deps.projectStorageRoot : deps.globalDataRoot, `skills/${name}/SKILL.md`)!.toString('utf8');
+        if (!text) fail('GENERATION_SKILL_MISSING');
+        const inspected = inspectWritingSkillMarkdown(text);
+        if (!inspected.compatible || !['bilingual', facts.language].includes(inspected.metadata.language)) fail('GENERATION_SKILL_INCOMPATIBLE');
+        inlineSkill = { name: inspected.metadata.displayName ?? name, content: text };
+        skills.push({ stage: 'inline', identity: id, hash: hash(text) });
+    }
     for (const file of observed) {
         const now = readFile(file.root, file.relative, true);
         if (!isDeepStrictEqual(now, file.bytes))
@@ -552,6 +563,7 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
     const finalizationContext = input.finalizationGenerationSlot ? captureFinalizationGenerationContext(deps.db, input.finalizationGenerationSlot, input, facts.language,
         importPrompts[input.finalizationGenerationSlot.stepKey === 'chapter_notes' ? 'generate_chapter_notes' : 'update_character_cards']!, input.finalizationGenerationContext) : undefined;
     if (finalizationContext) add('finalization-generation-context', 0, JSON.stringify(finalizationContext), 'finalized-fact', 'main captured finalization identity, original field baselines and selected prompt');
+    if (editorInlineContext && inlineSkill) editorInlineContext.skill = inlineSkill;
     if (editorInlineContext) add('editor-inline:author-draft', 0, JSON.stringify(editorInlineContext), 'author-constraint', 'explicit unsaved author manuscript and UTF16 selection; not a canonical document');
     const importContext = input.importSlot ? captureImportGenerationContext(deps.db, input.importSlot) : undefined;
     if (importContext) importContext.prompts = importPrompts;

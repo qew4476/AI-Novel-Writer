@@ -7,6 +7,8 @@ import { EditorView } from '@codemirror/view'
 import { useProjectStore } from '../../../stores/project-store'
 import { useLLMStore } from '../../../stores/llm-store'
 import { useLocaleStore } from '../../../stores/locale-store'
+import { skillRegistry } from '../../../services/agent/skill-registry'
+import { inspectWritingSkillMarkdown } from '../../../shared/writing-skills'
 import CodeMirrorEditor from '../CodeMirrorEditor'
 
 ;(globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
@@ -94,6 +96,7 @@ afterEach(async () => {
   useProjectStore.setState({ currentProject: null })
   useLLMStore.setState({ defaultModelId: null, activeRequests: new Map() })
   useLocaleStore.setState({ locale: 'zh-CN' })
+  vi.restoreAllMocks()
   Reflect.deleteProperty(window, 'aiNovelAPI')
 })
 
@@ -331,4 +334,28 @@ it('点击接受前原候选已丢弃，保留预览但不写入正文', async (
   await expect.element(page.getByText('来源已变化，结果仅可复制')).toBeVisible()
   expect(EditorView.findFromDOM(container.querySelector('.cm-editor')!)!.state.doc.toString()).toBe(documentText)
   await expect.element(page.getByText('候选')).toBeVisible()
+})
+
+
+it('revises the frozen selection with a one-off skill and author instructions', async () => {
+ useLocaleStore.setState({ locale: 'en-US' })
+ deferStream = true
+ const markdown = '---\nname: scene-craft\nlanguage: bilingual\nstage: refinement\n---\nPreserve scene causality.'
+ vi.spyOn(skillRegistry, 'loadAll').mockResolvedValue(undefined)
+ vi.spyOn(skillRegistry, 'listAll').mockReturnValue([{ skillId: 'user:scene-craft', metadata: { name: 'scene-craft', description: 'Scene craft' }, source: 'user', content: markdown, baseDir: '', filePath: '', writingSkill: inspectWritingSkillMarkdown(markdown) }])
+ await act(async () => root.render(<CodeMirrorEditor content="Original passage" mode="prose" />))
+ await act(async () => page.getByText('Original passage').click({ clickCount: 3 }))
+ await expect.element(page.getByRole('button', { name: 'Revise with skill' })).toBeVisible()
+ await act(async () => page.getByRole('button', { name: 'Revise with skill' }).click())
+ await expect.element(page.getByRole('button', { name: 'Generate revision' })).toBeDisabled()
+ await act(async () => page.getByRole('combobox', { name: 'Writing skill for this revision' }).selectOptions('user:scene-craft'))
+ await act(async () => page.getByRole('textbox', { name: 'Revision instructions (optional)' }).fill('Keep the ending.'))
+ const view = EditorView.findFromDOM(container.querySelector('.cm-editor')!)!
+ await act(async () => view.dispatch({ selection: { anchor: 0, head: 1 } }))
+ await act(async () => page.getByRole('button', { name: 'Generate revision' }).click())
+ expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ input: expect.objectContaining({ action: 'skill', skillId: 'user:scene-craft', instruction: 'Keep the ending.', selectedText: 'Original passage', from: 0, to: 16 }) }), expect.any(Object))
+ await act(async () => listeners.get('llm:stream-done')?.({ fullText: 'Revised passage', finishReason: 'stop' } as never))
+ await expect.element(page.getByRole('button', { name: 'Replace', exact: true })).toBeEnabled()
+ await act(async () => page.getByRole('button', { name: 'Replace', exact: true }).click())
+ expect(view.state.doc.toString()).toBe('Revised passage')
 })
