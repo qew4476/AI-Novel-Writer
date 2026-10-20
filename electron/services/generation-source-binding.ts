@@ -545,10 +545,15 @@ export function buildGenerationSourceBinding(deps: GenerationSourceBindingDepend
         const [scope, name] = id.split(':');
         const text = scope === 'builtin' ? deps.readBuiltinSkill?.(name, facts.language) : observe(scope === 'project' ? deps.projectStorageRoot : deps.globalDataRoot, `skills/${name}/SKILL.md`)!.toString('utf8');
         if (!text) fail('GENERATION_SKILL_MISSING');
-        const inspected = inspectWritingSkillMarkdown(text);
-        if (!inspected.compatible || !['bilingual', facts.language].includes(inspected.metadata.language)) fail('GENERATION_SKILL_INCOMPATIBLE');
-        inlineSkill = { name: inspected.metadata.displayName ?? name, content: text };
-        skills.push({ stage: 'inline', identity: id, hash: hash(text) });
+        const bundle: InstalledWritingSkillBundle = scope === 'user'
+            ? readInstalledWritingSkillBundle(relative => observe(deps.globalDataRoot, `skills/${name}/${relative}`, true))
+            : { status: 'none' };
+        if (bundle.status === 'damaged') fail('GENERATION_SKILL_BUNDLE_DAMAGED');
+        const inspected = inspectInstalledWritingSkill(text, bundle, name);
+        if (scope !== 'builtin' && !inspected.compatible || !['bilingual', facts.language].includes(inspected.metadata.language)) fail('GENERATION_SKILL_INCOMPATIBLE');
+        inlineSkill = { name: inspected.metadata.displayName ?? name, content: bundle.status === 'intact' ? inspected.content : text };
+        const bundled = bundle.status === 'intact' ? bundle.files.flatMap(file => [file.path, file.content]) : [];
+        skills.push({ stage: 'inline', identity: id, hash: hash(bundled.length ? JSON.stringify([text, ...bundled]) : text) });
     }
     for (const file of observed) {
         const now = readFile(file.root, file.relative, true);
