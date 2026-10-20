@@ -32,17 +32,19 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch']) {
   let model: ModelProfile | null = { id: 'synthetic', name: '合成模型', provider: 'openai', protocol: 'openai', modelName: 'gpt-4.1', apiKey: 'synthetic-key', baseUrl: 'https://api.openai.com/v1', temperature: 0.7, maxTokens: 2048, purposes: ['generation'], capabilities: { contextWindowTokens: 32768, maxOutputTokens: 2048, reasoning: false, structuredOutput: true, usage: true } }
   const spy = vi.fn<GenerationRunServiceDependencies['dispatch']>(dispatch ?? (async (_request, options) => { options.onVisible({ kind: 'delta', text: '我会检查。<tool_call>{"name":"read_project_state","arguments":{}}</tool_call>' }); return { finishReason: 'stop', usage: null } }))
   let templateBody='固定作者模板 {{edit_instruction}}：{{selected_text}}'
-  const deps = { db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({key,content:templateBody,systemRole:'写作助手'}) }
+  const deps = { readBuiltinSkill: readBuiltinWritingSkill, db, projectStorageRoot: root, globalDataRoot: root, readBuiltinPrompt: (key: string) => JSON.stringify({key,content:templateBody,systemRole:'写作助手'}) }
   const makeOwner = (epoch: string) => createMainGenerationOwner({ database: db, projectId: 'project', epoch, assertCurrent: () => {}, leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch: spy,
     buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(deps, { ...selection, projectId: 'project', epoch, modelReceipt, policy, outputContract: generationOutputContract(selection) }).binding,
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
   const owner = makeOwner('epoch-1')
-  cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
+  cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) })
   const reopenStorage = () => { owner.suspendForProjectClose(); db.close(); db = new Database(path.join(root, '.ai-novel', 'project.db')); deps.db = db; vi.mocked(getProjectDb).mockReturnValue(db); const next=makeOwner('epoch-2'); cleanup.unshift(()=>next.suspendForProjectClose()); return next }
   return {root,get db(){return db},owner,spy,reopenStorage,changeTemplate:()=>{templateBody='后来模板 {{selected_text}}'},removeModel:()=>{model=null}}
 }
 
 import { createHash } from 'node:crypto'
+import { readBuiltinWritingSkill } from '../../../src/shared/builtin-writing-skills'
+import { WRITING_SKILL_BUNDLE_MANIFEST, writingSkillBundleManifest } from '../writing-skill-package'
 const input={action:'refine' as const,documentText:'甲😀林岚\r\n乙',from:1,to:5,selectedText:'😀林岚'}
 const request={input,modelId:'synthetic',uiActionNonce:'作者润色'}
 it('main实际模板与UTF16原文hash冻结，不把草稿声称为canonical',()=>{
@@ -112,4 +114,33 @@ it('freezes a one-off skill, instruction and manuscript without changing stage b
  expect(fs.existsSync(path.join(f.root, 'writing-skills.json'))).toBe(false)
  expect(() => f.owner.beginEditorInline({ ...request, uiActionNonce: 'missing-skill', input: { ...selection, skillId: 'project:missing' } })).toThrow()
  expect(() => f.owner.beginEditorInline({ ...request, uiActionNonce: 'invalid-skill', input: { ...selection, skillId: 'project:../private' } })).toThrow()
+})
+
+
+it.each(['project', 'user', 'builtin'] as const)('dispatches an inline %s skill through the main owner', async scope => {
+ const f = fixture()
+ const name = scope === 'builtin' ? 'writing-coach' : 'scene-craft'
+ let reference: string | undefined
+ if (scope !== 'builtin') {
+  const dir = path.join(f.root, 'skills', name)
+  fs.mkdirSync(dir, { recursive: true })
+  reference = scope === 'user' ? 'Preserve the lantern as the viewpoint anchor.' : undefined
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: scene-craft\nlanguage: bilingual\nstage: refinement\n---\nKeep concrete movement.' + (reference ? '\nRead [voice](references/voice.md).' : ''))
+  if (reference) {
+   const files = [{ path: 'references/voice.md', content: reference }]
+   fs.mkdirSync(path.join(dir, 'references'))
+   fs.writeFileSync(path.join(dir, 'references/voice.md'), reference)
+   fs.writeFileSync(path.join(dir, WRITING_SKILL_BUNDLE_MANIFEST), writingSkillBundleManifest(files))
+  }
+ }
+ const recovery = f.owner.beginEditorInline({ ...request, input: { ...input, action: 'skill', skillId: `${scope}:${name}`, instruction: '' } })
+ const receipt = await f.owner.executeEditorInline(recovery.view.handle)
+ expect(f.spy).toHaveBeenCalledTimes(1)
+ expect(receipt.outcome.status).toBe('completed')
+ if (reference) {
+  expect(JSON.stringify(f.spy.mock.calls[0]![0])).toContain(reference)
+  fs.writeFileSync(path.join(f.root, 'skills', name, 'references/voice.md'), 'Changed viewpoint.')
+  expect(f.owner.readEditorInlineRecovery(recovery.view.handle).sourceStatus).toBe('conflict')
+  expect(() => f.owner.beginEditorInline({ ...request, uiActionNonce: 'damaged-bundle', input: { ...input, action: 'skill', skillId: `${scope}:${name}`, instruction: '' } })).toThrow('GENERATION_SKILL_BUNDLE_DAMAGED')
+ }
 })
