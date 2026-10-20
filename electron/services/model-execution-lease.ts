@@ -14,6 +14,7 @@ interface ModelExecutionLeaseRecord {
 }
 
 export interface ModelExecutionLeaseRegistryOptions {
+  executionIdentity?: () => string
   loadModel: (modelId: string) => ModelProfile | null
   createLeaseId?: () => string
   now?: () => number
@@ -29,6 +30,8 @@ export class ModelExecutionLeaseError extends Error {
     this.name = 'ModelExecutionLeaseError'
   }
 }
+
+export type ExecutionModelProfile = ModelProfile & { chatgptPlanExecutionIdentity?: string }
 
 function cloneModelProfile(model: ModelProfile): ModelProfile {
   return structuredClone(model)
@@ -127,6 +130,8 @@ function modelRevision(model: ModelProfile): string {
     capabilities: model.capabilities ?? null,
     reasoningOverride: model.reasoningOverride ?? 'auto',
     ...(model.reasoningMapping ? { reasoningMapping: model.reasoningMapping } : {}),
+    ...((model as ExecutionModelProfile).chatgptPlanExecutionIdentity
+      ? { accountIdentity: (model as ExecutionModelProfile).chatgptPlanExecutionIdentity } : {}),
     purposes: model.purposes,
     embeddingOptions: model.embeddingOptions ?? null,
   })
@@ -163,6 +168,7 @@ export function createModelExecutionLeaseReceipt(
 
 /** Main-process-only store for immutable model execution snapshots. */
 export class ModelExecutionLeaseRegistry {
+  private readonly executionIdentity?: () => string
   private readonly records = new Map<string, ModelExecutionLeaseRecord>()
   private readonly loadModel: (modelId: string) => ModelProfile | null
   private readonly createLeaseId: () => string
@@ -170,10 +176,21 @@ export class ModelExecutionLeaseRegistry {
   private readonly ttlMs: number
 
   constructor(options: ModelExecutionLeaseRegistryOptions) {
+    this.executionIdentity = options.executionIdentity
     this.loadModel = options.loadModel
     this.createLeaseId = options.createLeaseId ?? randomUUID
     this.now = options.now ?? Date.now
     this.ttlMs = options.ttlMs ?? DEFAULT_MODEL_EXECUTION_LEASE_TTL_MS
+  }
+
+  private bind(model: ModelProfile): ExecutionModelProfile {
+    if (model.provider !== 'chatgpt-plan') return cloneModelProfile(model)
+    if (!this.executionIdentity) throw new Error('ChatGPT execution identity unavailable')
+    return { ...cloneModelProfile(model), chatgptPlanExecutionIdentity: this.executionIdentity() }
+  }
+
+  createReceipt(model: ModelProfile, options: CreateModelExecutionLeaseReceiptOptions): ModelExecutionLeaseReceipt {
+    return createModelExecutionLeaseReceipt(this.bind(model), options)
   }
 
   begin(modelId: string): ModelExecutionLeaseReceipt {
@@ -181,14 +198,15 @@ export class ModelExecutionLeaseRegistry {
     if (!model) throw new ModelExecutionLeaseError('MODEL_NOT_FOUND', '未找到模型配置')
 
     const createdAt = this.now()
-    const receipt = createModelExecutionLeaseReceipt(model, {
+    const snapshot = this.bind(model)
+    const receipt = createModelExecutionLeaseReceipt(snapshot, {
       leaseId: this.createLeaseId(),
       createdAt,
       expiresAt: createdAt + this.ttlMs,
     })
     this.records.set(receipt.leaseId, {
       receipt,
-      snapshot: cloneModelProfile(model),
+      snapshot,
     })
     return { ...receipt }
   }
@@ -199,6 +217,10 @@ export class ModelExecutionLeaseRegistry {
     if (this.now() >= record.receipt.expiresAt) {
       this.records.delete(leaseId)
       throw new Error('模型执行租约已过期')
+    }
+    if (record.snapshot.provider === 'chatgpt-plan'
+      && (record.snapshot as ExecutionModelProfile).chatgptPlanExecutionIdentity !== this.executionIdentity?.()) {
+      throw new Error('ChatGPT connection changed; start a new task / ChatGPT 连接已变更，请重新开始任务')
     }
     return cloneModelProfile(record.snapshot)
   }

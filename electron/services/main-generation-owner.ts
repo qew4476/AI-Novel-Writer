@@ -12,7 +12,7 @@ import { DRAFT_RECONCILE_PURPOSE, stripDraftReconciliationBlock } from '../../sr
 import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOutlineBlock } from '../../src/shared/draft-short-outline'
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { getCurrentProjectPath } from '../database'
-import { ModelExecutionLeaseRegistry, createModelExecutionLeaseReceipt } from './model-execution-lease'
+import { ModelExecutionLeaseRegistry } from './model-execution-lease'
 import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
@@ -282,7 +282,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   function currentModelReceipt(binding: RunBinding): SafeGenerationModelReceipt {
     const model = deps.loadModel(modelReceipt(binding).modelId)
     if (!model) throw new Error('GENERATION_MODEL_MISSING')
-    return safeGenerationModelReceipt(createModelExecutionLeaseReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
+    return safeGenerationModelReceipt(deps.leases.createReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
   }
   const viewOf = (run: DurableGenerationRun): MainGenerationRunView => {
     const { budget, plotOutline, attempts } = repository.readRunView(run.runId)
@@ -355,7 +355,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       || Object.keys(request).some(key => !['chapterNumber', 'modelId', 'promptKeys', 'skillStages', 'authorInputs', 'query', 'selectedDraftIds', 'batchId'].includes(key))) throw new Error('GENERATION_DRAFT_PREPARATION_INVALID')
     const model = deps.loadModel(request.modelId)
     if (!model) throw new Error('GENERATION_MODEL_MISSING')
-    const receipt = safeGenerationModelReceipt(createModelExecutionLeaseReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
+    const receipt = safeGenerationModelReceipt(deps.leases.createReceipt(model, { leaseId: 'read-only-evidence', createdAt: 0, expiresAt: 0 }))
     const selection = { operation: 'chapter-draft', uiActionNonce: 'prepare-only', modelId: request.modelId, chapterNumber: request.chapterNumber,
       selectedDraftIds: request.selectedDraftIds, selectedFinalizedDraftIds: [], selectedBlueprintChapterNumbers: Array.from({ length: 6 }, (_, index) => request.chapterNumber + index),
       promptKeys: request.promptKeys, skillStages: request.skillStages, authorInputs: request.authorInputs, output: 'visible-text' as const,
