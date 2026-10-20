@@ -22,6 +22,7 @@
     "verify:drive": "node scripts/redesign/drive.mjs",
     "build": "tsc && vite build",
     "build:win": "pnpm run release:win:verify",
+    "build:win:skip-tests": "pnpm run clean:build && pnpm run rebuild:electron && pnpm run build && electron-builder --win nsis --x64 --publish never",
     "build:win:artifacts": "node scripts/require-release-gate.mjs && pnpm run rebuild:electron && tsc && vite build && electron-builder --win --x64 --publish never",
     "release:win:verify": "node scripts/release-win-verify.mjs",
     "build:win-dir": "pnpm run clean:build && pnpm run typecheck && pnpm run rebuild:electron && vite build && electron-builder --win dir --x64 && pnpm run verify:win-package",
