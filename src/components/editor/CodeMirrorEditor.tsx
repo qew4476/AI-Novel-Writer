@@ -625,7 +625,11 @@ export default function CodeMirrorEditor({
           ) : skillPickerOpen ? (
             <div className="cm-selbar-preview">
               <label className="block text-sm">{uiText('本次写作 Skill', 'Writing skill for this revision')}
-                <NativeSelect aria-label={uiText('本次写作 Skill', 'Writing skill for this revision')} value={inlineSkillId} onChange={event => setInlineSkillId(event.target.value)}>
+                <NativeSelect aria-label={uiText('本次写作 Skill', 'Writing skill for this revision')} value={inlineSkillId} onChange={event => {
+                  const skillId = event.target.value
+                  setInlineSkillId(skillId)
+                  try { localStorage.setItem('ai-novel:inline-writing-skill', skillId) } catch { /* Keep selection usable when storage is unavailable. */ }
+                }}>
                   <option value="">{uiText('请选择 Skill', 'Select a skill')}</option>
                   {inlineSkills.map(skill => <option key={skill.skillId} value={skill.skillId}>{skill.writingSkill.metadata.displayName ?? skill.metadata.name}</option>)}
                 </NativeSelect>
@@ -667,7 +671,14 @@ export default function CodeMirrorEditor({
                 if (!view || !selectionRange) return
                 skillSelectionRef.current = { input: { ...selectionRange, selectedText: view.state.sliceDoc(selectionRange.from, selectionRange.to), documentText: view.state.doc.toString() }, filePath, sessionKey: JSON.stringify(getActiveProjectSessionContext()) }
                 setSkillPickerOpen(true); setInlineSkills([]); setInlineSkillId(''); setSkillLoadError(false)
-                void skillRegistry.loadAll().then(() => setInlineSkills(skillRegistry.listAll().filter(skill => skill.writingSkill.compatible && ['bilingual', resolveWritingLanguage(useProjectStore.getState().currentProject?.novelConfig.writingLanguage)].includes(skill.writingSkill.metadata.language)))).catch(() => setSkillLoadError(true))
+                void skillRegistry.loadAll().then(() => {
+                  const skills = skillRegistry.listAll().filter(skill => skill.writingSkill.compatible && ['bilingual', resolveWritingLanguage(useProjectStore.getState().currentProject?.novelConfig.writingLanguage)].includes(skill.writingSkill.metadata.language))
+                  setInlineSkills(skills)
+                  try {
+                    const lastSkillId = localStorage.getItem('ai-novel:inline-writing-skill')
+                    setInlineSkillId(skills.some(skill => skill.skillId === lastSkillId) ? lastSkillId! : '')
+                  } catch { /* Leave the picker unselected when storage is unavailable. */ }
+                }).catch(() => setSkillLoadError(true))
               }}>{uiText(...SKILL_ACTION.label)}</Button>
               {AI_ACTIONS.map((action, index) => (
                 <Button key={action.key} variant="text" size="sm" className="cm-selbar-tool" onClick={() => handleAIAction(action)}>

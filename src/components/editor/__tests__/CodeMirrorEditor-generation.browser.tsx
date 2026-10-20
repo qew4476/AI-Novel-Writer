@@ -26,6 +26,7 @@ let rejectFirstLease: ((error: Error) => void) | null
 let leaseRequestCount: number
 
 beforeEach(() => {
+  localStorage.removeItem('ai-novel:inline-writing-skill')
   window.getSelection()?.removeAllRanges()
   container = document.createElement('div')
   document.body.append(container)
@@ -96,6 +97,7 @@ afterEach(async () => {
   useProjectStore.setState({ currentProject: null })
   useLLMStore.setState({ defaultModelId: null, activeRequests: new Map() })
   useLocaleStore.setState({ locale: 'zh-CN' })
+  localStorage.removeItem('ai-novel:inline-writing-skill')
   vi.restoreAllMocks()
   Reflect.deleteProperty(window, 'aiNovelAPI')
 })
@@ -358,4 +360,27 @@ it('revises the frozen selection with a one-off skill and author instructions', 
  await expect.element(page.getByRole('button', { name: 'Replace', exact: true })).toBeEnabled()
  await act(async () => page.getByRole('button', { name: 'Replace', exact: true }).click())
  expect(view.state.doc.toString()).toBe('Revised passage')
+})
+
+
+it.each([true, false])('restores the last selected skill only when available (%s)', async available => {
+ useLocaleStore.setState({ locale: 'en-US' })
+ const markdown = '---\nname: scene-craft\nlanguage: bilingual\nstage: refinement\n---\nPreserve scene causality.'
+ vi.spyOn(skillRegistry, 'loadAll').mockResolvedValue(undefined)
+ const list = vi.spyOn(skillRegistry, 'listAll').mockReturnValue([{ skillId: 'user:scene-craft', metadata: { name: 'scene-craft', description: 'Scene craft' }, source: 'user', content: markdown, baseDir: '', filePath: '', writingSkill: inspectWritingSkillMarkdown(markdown) }])
+ const openPicker = async () => {
+  await act(async () => page.getByText('Original passage').click({ clickCount: 3 }))
+  await act(async () => page.getByRole('button', { name: 'Revise with skill' }).click())
+ }
+ await act(async () => root.render(<CodeMirrorEditor content="Original passage" mode="prose" />))
+ await openPicker()
+ await act(async () => page.getByRole('combobox', { name: 'Writing skill for this revision' }).selectOptions('user:scene-craft'))
+ expect(localStorage.getItem('ai-novel:inline-writing-skill')).toBe('user:scene-craft')
+ await act(async () => root.render(<div />))
+ if (!available) list.mockReturnValue([])
+ await act(async () => root.render(<CodeMirrorEditor content="Original passage" mode="prose" />))
+ await openPicker()
+ await vi.waitFor(() => expect((container.querySelector('select') as HTMLSelectElement).value).toBe(available ? 'user:scene-craft' : ''))
+ if (available) await expect.element(page.getByRole('button', { name: 'Generate revision' })).toBeEnabled()
+ else await expect.element(page.getByRole('button', { name: 'Generate revision' })).toBeDisabled()
 })
