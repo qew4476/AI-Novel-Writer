@@ -1,3 +1,4 @@
+import type { ExecutionModelProfile } from '../services/model-execution-lease'
 import type { LLMFinishReason, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import type { ILLMProvider, LLMGenerateOptions, LLMResponse, LLMStreamOptions } from './provider.interface'
 import { chatgptPlanAccessToken } from '../services/chatgpt-plan'
@@ -38,7 +39,7 @@ export class ChatgptPlanProvider implements ILLMProvider {
       }))
       const response = await fetch('https://api.openai.com/v1/responses', {
         method: 'POST', signal: opts.signal, redirect: 'error',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await chatgptPlanAccessToken()}` },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${await chatgptPlanAccessToken((model as ExecutionModelProfile).chatgptPlanExecutionIdentity)}` },
         body: JSON.stringify({ model: model.modelName, input, store: false, stream: true,
           max_output_tokens: opts.maxTokens,
           // Account catalogs do not advertise sampling support. Use the model default.

@@ -15,7 +15,11 @@ vi.mock('electron', () => ({
   shell: { openExternal: runtime.openExternal },
 }))
 
-import { chatgptPlanAccessToken, chatgptPlanModels, chatgptPlanStatus, disconnectChatgptPlan, signInChatgptPlan } from '../chatgpt-plan'
+import { ModelExecutionLeaseRegistry } from '../model-execution-lease'
+import { ChatgptPlanProvider } from '../../llm/chatgpt-plan-provider'
+import type { ModelProfile } from '../../../src/shared/ipc-channels'
+
+import { chatgptPlanExecutionIdentity, chatgptPlanAccessToken, chatgptPlanModels, chatgptPlanStatus, disconnectChatgptPlan, signInChatgptPlan } from '../chatgpt-plan'
 
 const credentials = () => ({ clientId: 'issued-client', subject: 'account', email: 'test@example.invalid',
   idToken: 'test-id', accessToken: 'old-access', refreshToken: 'old-refresh', expiresAt: 0,
@@ -61,6 +65,39 @@ describe('ChatGPT plan credentials', () => {
     finish(new Response(JSON.stringify({ access_token: 'new', refresh_token: 'new', expires_in: 3600 })))
     await expect(pending).rejects.toThrow('connection changed')
     expect(chatgptPlanStatus().connected).toBe(false)
+  })
+
+  it('binds requests and restored receipts to the login, while allowing token refresh', async () => {
+    save()
+    const model: ModelProfile = { id: 'plan', name: 'Plan', provider: 'chatgpt-plan', protocol: 'openai',
+      modelName: 'synthetic', apiKey: '', baseUrl: 'https://api.openai.com/v1',
+      temperature: 0.7, maxTokens: 1000, purposes: ['generation'] }
+    const registry = () => new ModelExecutionLeaseRegistry({ loadModel: () => model, executionIdentity: chatgptPlanExecutionIdentity })
+    const leases = registry()
+    const lease = leases.begin(model.id)
+    const frozen = leases.resolve(lease.leaseId)
+    const provider = new ChatgptPlanProvider()
+    vi.mocked(fetch).mockImplementation(async address => String(address).endsWith('/token')
+      ? new Response(JSON.stringify({ access_token: 'rotated-A', refresh_token: 'rotated-refresh', expires_in: 3600 }))
+      : new Response('data: {"type":"response.completed"}\n\n'))
+    expect((await provider.generate(frozen, [], { maxTokens: 1000, temperature: 0.7 })).success).toBe(true)
+    expect(registry().begin(model.id).modelRevision).toBe(lease.modelRevision)
+    expect(leases.resolve(lease.leaseId)).toEqual(frozen)
+    disconnectChatgptPlan()
+    await expect(chatgptPlanAccessToken()).rejects.toThrow('Connect your ChatGPT plan')
+    save({ ...credentials(), subject: 'account-B', accessToken: 'token-B', expiresAt: Date.now() + 3600_000 })
+    const calls = vi.mocked(fetch).mock.calls.length
+    expect((await provider.generate(frozen, [], { maxTokens: 1000, temperature: 0.7 })).success).toBe(false)
+    expect(fetch).toHaveBeenCalledTimes(calls)
+    expect(() => leases.resolve(lease.leaseId)).toThrow('start a new task')
+    const reopened = registry()
+    const next = reopened.begin(model.id)
+    expect(next.modelRevision).not.toBe(lease.modelRevision)
+    expect((await provider.generate(reopened.resolve(next.leaseId), [], { maxTokens: 1000, temperature: 0.7 })).success).toBe(true)
+    expect(vi.mocked(fetch).mock.calls.at(-1)?.[1]?.headers).toMatchObject({ Authorization: 'Bearer token-B' })
+    disconnectChatgptPlan()
+    save({ ...credentials(), expiresAt: Date.now() + 3600_000 })
+    expect(registry().begin(model.id).modelRevision).not.toBe(lease.modelRevision)
   })
 
   it('requires secure storage before launching the browser', async () => {

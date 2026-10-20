@@ -13,6 +13,7 @@ let signingIn: Promise<ReturnType<typeof chatgptPlanStatus>> | undefined
 let refreshing: Promise<string> | undefined
 
 interface Credentials {
+  sessionId?: string
   clientId: string
   subject: string
   email: string
@@ -178,7 +179,7 @@ async function signIn(): Promise<ReturnType<typeof chatgptPlanStatus>> {
     }
     if (revision !== credentialRevision) throw new Error('ChatGPT sign-in cancelled')
     credentialRevision += 1
-    saveCredentials({ clientId: issuedId, subject: identity.sub, email: identity.email,
+    saveCredentials({ sessionId: randomUUID(), clientId: issuedId, subject: identity.sub, email: identity.email,
       idToken: tokens.id_token, accessToken: tokens.access_token,
       refreshToken: tokens.refresh_token, expiresAt: Date.now() + tokens.expires_in * 1000, scopes })
     return chatgptPlanStatus()
@@ -187,9 +188,31 @@ async function signIn(): Promise<ReturnType<typeof chatgptPlanStatus>> {
   }
 }
 
-export async function chatgptPlanAccessToken(): Promise<string> {
+/** Stable across refresh and app restarts, revoked by disconnect or sign-in. */
+export function chatgptPlanExecutionIdentity(): string {
+  const saved = readCredentials()
+  if (!saved?.scopes.includes('chatgpt.tokens.use.direct') || !saved.scopes.includes('resource.invoke')) {
+    throw new Error('Connect your ChatGPT plan in model settings / 请先在模型设置中连接 ChatGPT 订阅')
+  }
+  if (!saved.sessionId) {
+    saved.sessionId = randomUUID()
+    saveCredentials(saved)
+  }
+  return createHash('sha256').update(JSON.stringify([saved.subject, saved.clientId, saved.sessionId])).digest('hex')
+}
+
+export async function chatgptPlanAccessToken(expectedIdentity?: string): Promise<string> {
+  const identity = expectedIdentity ?? chatgptPlanExecutionIdentity()
+  const assertIdentity = () => {
+    if (chatgptPlanExecutionIdentity() !== identity) {
+      throw new Error('ChatGPT connection changed; start a new task / ChatGPT 连接已变更，请重新开始任务')
+    }
+  }
+  assertIdentity()
   if (!refreshing) refreshing = accessToken().finally(() => { refreshing = undefined })
-  return refreshing
+  const token = await refreshing
+  assertIdentity()
+  return token
 }
 
 async function accessToken(): Promise<string> {

@@ -20,7 +20,7 @@ import {
   ModelExecutionLeaseRegistry,
 } from '../services/model-execution-lease'
 import { ModelDiscoveryService } from '../services/model-discovery-service'
-import { chatgptPlanStatus, signInChatgptPlan, disconnectChatgptPlan, chatgptPlanModels } from '../services/chatgpt-plan'
+import { chatgptPlanExecutionIdentity, chatgptPlanStatus, signInChatgptPlan, disconnectChatgptPlan, chatgptPlanModels } from '../services/chatgpt-plan'
 
 interface ActiveStream {
   controller: AbortController
@@ -126,7 +126,7 @@ export function registerLLMController() {
     try { disconnectChatgptPlan(); return { success: true } }
     catch { return { success: false } }
   })
-  const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig })
+  const modelExecutionLeases = new ModelExecutionLeaseRegistry({ loadModel: getModelConfig, executionIdentity: chatgptPlanExecutionIdentity })
   const modelDiscovery = new ModelDiscoveryService()
   const closedExecutionLeaseTombstones = new Map<string, number>()
 

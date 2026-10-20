@@ -48,7 +48,7 @@ afterEach(() => { vi.unstubAllGlobals(); for (const cleanup of cleanups.splice(0
 const task = { purpose: 'chapter-draft', output: 'visible-text' as const, messages: [{ role: 'user' as const, content: '保留作者事实，创作中文段落。' }] }
 function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silicon = false,
   onReasoning?: (event: { projectId: string; epoch: string; rootActionId: string; runId: string; attemptId: string; text: string }) => void,
-  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot']) {
+  onSnapshot?: import('../main-generation-owner').MainGenerationOwnerDependencies['onSnapshot'], executionIdentity?: () => string) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/s05-owner-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -71,7 +71,7 @@ function fixture(dispatch?: GenerationRunServiceDependencies['dispatch'], silico
       readBuiltinPrompt: (key: string, language: 'zh-CN' | 'en-US') => JSON.stringify(getBuiltinPromptTemplate(key, language)), readBuiltinSkill: readBuiltinWritingSkill }
     return createMainGenerationOwner({ database: capturedDb, projectId: 'project', epoch: capturedEpoch,
       assertCurrent: () => { if (!current || capturedEpoch !== epoch || capturedDb !== db) throw new Error('GENERATION_EPOCH_STALE') },
-      leases: new ModelExecutionLeaseRegistry({ loadModel: () => model }), loadModel: () => model, dispatch,
+      leases: new ModelExecutionLeaseRegistry({ loadModel: () => model, executionIdentity }), loadModel: () => model, dispatch,
       onReasoning,
       onSnapshot,
       buildBinding: (selection, modelReceipt, policy) => buildGenerationSourceBinding(sourceDeps, { ...selection, projectId: 'project', epoch: capturedEpoch,
@@ -2849,4 +2849,24 @@ it('keeps the next plot-outline recovery chapter empty instead of duplicating th
  const recovery=f.owner.readContext(run.handle).plotOutlineRecovery!
  expect(recovery.draft.split(outlineEntry(1))).toHaveLength(2)
  expect(recovery.draft).toContain('## 第2章：')
+})
+
+
+it('rejects old subscription runs after account switching and project reopen', async () => {
+  let identity = 'account-A-session-1'
+  const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: 'stop', usage: null }))
+  const f = fixture(dispatch, false, undefined, undefined, () => identity)
+  f.model.provider = 'chatgpt-plan'
+  const run = f.owner.begin(f.begin)
+  await f.owner.execute({ handle: run.handle, invocationNonce: 'first', task })
+  expect(dispatch).toHaveBeenCalledTimes(1)
+  identity = 'account-B-session-2'
+  await expect(f.owner.execute({ handle: run.handle, invocationNonce: 'second', task })).rejects.toThrow()
+  expect(dispatch).toHaveBeenCalledTimes(1)
+  const reopened = f.reopen()
+  await expect(reopened.resume(run.handle)).rejects.toThrow('GENERATION_RECOVERY_UNAUTHORIZED')
+  expect(dispatch).toHaveBeenCalledTimes(1)
+  const next = reopened.begin({ ...f.begin, uiActionNonce: 'new-account-task' })
+  await reopened.execute({ handle: next.handle, invocationNonce: 'new-first', task })
+  expect(dispatch).toHaveBeenCalledTimes(2)
 })
