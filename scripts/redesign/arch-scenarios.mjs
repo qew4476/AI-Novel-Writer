@@ -104,6 +104,70 @@ async function openArchitecture(page) {
   else await arch.waitReady(page)
 }
 
+/**
+ * #465：窗口 1024 与 1280 宽（后者另测开着运行侧页）、中英文界面下，角色名单页的导入按钮不超出名单栏，
+ * 定位下拉框放得下每个选项，档案首行的输入框文字区至少放得下三个字。截图停在角色名单页，返回实测的宽度。
+ */
+async function castFitAt({ page, invoke, reload }, locale, width, sheet) {
+  await page.setViewportSize({ width, height: 768 })
+  if (locale === 'en-US') {
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, '灯塔')
+    await page.getByRole('navigation', { name: 'Writing flow' }).getByRole('button', { name: /^Architecture/ }).click()
+    await root(page).locator('.arch-page:not([data-loading]):not([data-cast-loading])').waitFor({ state: 'visible', timeout: 30_000 })
+    await root(page).getByRole('region', { name: 'Cast', exact: true }).getByRole('button', { name: 'Open cast' }).click()
+  } else {
+    await openArchitecture(page)
+    await arch.openCast(page)
+  }
+  await root(page).locator('.cast-select').waitFor({ state: 'visible' })
+  if (sheet) {
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog').getByRole('combobox').waitFor({ state: 'visible' })
+    await page.keyboard.type(locale === 'en-US' ? 'Run sheet' : '运行侧页')
+    await page.keyboard.press('Enter')
+    await runSheet.sheet(page).waitFor({ state: 'visible' })
+    await page.waitForTimeout(400)
+  }
+  const measured = await page.evaluate(() => {
+    const roster = document.querySelector('.cast-roster').getBoundingClientRect()
+    const buttons = [...document.querySelectorAll('.cast-roster-actions .pi-btn')].map(button => {
+      const box = button.getBoundingClientRect()
+      return { label: button.textContent, left: Math.round(box.left), right: Math.round(box.right), height: Math.round(box.height) }
+    })
+    // 原生下拉框的箭头画在内容区里：同样样式、只含这一个选项、按内容取宽的副本有多宽，选中它时就要多宽才放得下。
+    const select = document.querySelector('.cast-select')
+    const needed = Object.fromEntries([...select.options].map(option => {
+      const probe = select.cloneNode(false)
+      probe.append(option.cloneNode(true))
+      probe.style.cssText = 'position: absolute; visibility: hidden; width: auto; min-width: 0'
+      select.parentElement.append(probe)
+      const width = Math.ceil(probe.getBoundingClientRect().width)
+      probe.remove()
+      return [option.textContent, width]
+    }))
+    const inputs = Object.fromEntries([...document.querySelectorAll('.cast-row-fields input')].map(input => {
+      const style = getComputedStyle(input)
+      return [input.closest('.cast-field').querySelector('label').textContent, {
+        text: Math.floor(input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)),
+        needed: Math.ceil(3 * parseFloat(style.fontSize)),
+      }]
+    }))
+    return {
+      page: Math.round(document.querySelector('.cast-body').getBoundingClientRect().width),
+      rosterRight: Math.round(roster.right), buttons, role: { width: Math.round(select.getBoundingClientRect().width), needed }, inputs,
+    }
+  })
+  const problems = [
+    ...measured.buttons.filter(button => button.right > measured.rosterRight).map(button => `「${button.label}」超出名单栏`),
+    ...Object.entries(measured.role.needed).filter(([, needed]) => needed > measured.role.width).map(([option]) => `定位下拉框放不下「${option}」`),
+    ...Object.entries(measured.inputs).filter(([, input]) => input.text < input.needed).map(([label]) => `「${label}」输入框太窄`),
+  ]
+  assert.deepEqual(problems, [], JSON.stringify(measured))
+  return measured
+}
+
 /** RD-4 的运行侧页在工作流开始后自动打开；trunk 的旧运行面板没有「进行中」分页，调用方改为轮询数据库里的结果。 */
 async function waitForRunDone(page, timeout = 120_000) {
   const opened = await runSheet.tab(page, '进行中').waitFor({ state: 'visible', timeout: 10_000 }).then(() => true, () => false)
@@ -128,7 +192,7 @@ function outlineChapters(synopsis) {
 }
 
 /**
- * 对比用的文字对比度：名称与正文类至少 4.5:1，说明类至少 3:1，底色沿祖先叠加求出。
+ * 对比用的文字对比度：普通字号的文字（说明类也算）至少 4.5:1，底色沿祖先叠加求出。
  * 另核对分节卡片的底色来自纸墨令牌 --paper（计算值与令牌的计算值相同）。
  */
 async function archContrastFailures(page) {
@@ -157,7 +221,7 @@ async function archContrastFailures(page) {
       return (high + 0.05) / (low + 0.05)
     }
     const checks = [['.arch-title', 4.5], ['.arch-section-title', 4.5], ['.arch-section-summary', 4.5], ['.arch-lede', 4.5],
-      ['.arch-eyebrow', 3], ['.arch-badge', 3], ['.arch-section-num', 3], ['.pi-notice-title', 4.5], ['.pi-notice-text', 4.5]]
+      ['.arch-eyebrow', 4.5], ['.arch-badge', 4.5], ['.arch-section-num', 4.5], ['.pi-notice-title', 4.5], ['.pi-notice-text', 4.5]]
     const contrast = checks.flatMap(([selector, minimum]) => [...document.querySelectorAll(`[data-shell-presentation="stage"] ${selector}`)].map(element => {
       const value = ratio(parse(getComputedStyle(element).color), backdrop(element))
       return { selector, text: element.textContent.slice(0, 30), ratio: Math.round(value * 100) / 100, minimum }
@@ -379,6 +443,36 @@ export const ARCH_SCENARIOS = {
   } },
 
   /**
+   * #441 后续与 #453 的 CodeRabbit 意见：同 arch-model-change-last，第 6 章（范围 6–6）生成完、正式保存被拒。
+   * 从架构页点「查看恢复稿」打开的恢复稿与运行侧页的恢复卡，标题都写「第 6 章」，说明不说已经生成完毕，叫作者从第 6 章重新生成。
+   */
+  'rst-outline-last-note': { model: true, shell: 'stage', setup: seedArch({ clear: ['synopsis'], totalChapters: 24 }), run: async context => {
+    const { page } = context
+    const last = await stallOutlineBatchAndChangeModel(context, 6)
+    await last.waitFor({ state: 'visible', timeout: 60_000 })
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: /大纲恢复稿 · 第 6/ })
+    await card.waitFor({ state: 'visible', timeout: 10_000 })
+    const cardText = await card.innerText()
+    assert.match(cardText, /大纲恢复稿 · 第 6 章\n/, '运行侧页恢复卡标题不写「6–6」')
+    assert.match(cardText, /请从第 6 章重新生成情节大纲/)
+    assert.doesNotMatch(cardText, /已经生成完毕/)
+    const titles = await runSheet.recovery(page).getByRole('article').locator('h3').allInnerTexts()
+    assert.deepEqual(titles.filter(title => /大纲恢复稿/.test(title)), ['大纲恢复稿 · 第 6 章'], '已原样写进正式大纲的第 1–5 章不列为可恢复（#464）')
+    await openArchitecture(page)
+    await arch.waitReady(page)
+    await arch.section(page, 'synopsis').getByRole('button', { name: '查看恢复稿' }).click()
+    const tab = stage.tab(page, '大纲恢复稿 · 第 6 章')
+    await tab.waitFor({ state: 'visible', timeout: 10_000 })
+    const content = stage.root(page).locator('.stage-content')
+    await content.getByText(/请从第 6 章重新生成情节大纲/).waitFor({ state: 'visible', timeout: 10_000 })
+    const viewer = await content.innerText()
+    assert.doesNotMatch(viewer, /已经生成完毕/, '恢复稿页不说这批已生成完毕')
+    assert.match(viewer, /待完成第 6 章，每章目标/, '恢复稿页顶部的待完成范围只剩一章时写「第 6 章」')
+    assert.doesNotMatch(viewer, /第 6 至 6 章/)
+    return { card: cardText.replace(/\s+/g, ' ').slice(0, 200), viewer: viewer.replace(/\s+/g, ' ').slice(0, 300) }
+  } },
+
+  /**
    * #441 双审计 P2：本批最后一章（第 6 章，范围 6–6）生成期间改模型，候选生成完、正式保存被来源检查拒绝。
    * 上一次运行不出现原始错误码；架构页的大纲提示只能查看或复制并给「从第 6 章重新生成」，不再退回续写与「编辑恢复稿」。
    */
@@ -519,6 +613,9 @@ export const ARCH_SCENARIOS = {
     await root(page).locator('.cast-roster-foot').filter({ hasText: '1 character · page 1 / 1' }).waitFor()
     return { regions }
   } },
+
+  ...Object.fromEntries(['zh-CN', 'en-US'].flatMap(locale => [[1024, false], [1280, false], [1280, true]].map(([width, sheet]) =>
+    [`cast-fit-${locale === 'en-US' ? 'en' : 'zh'}-${width}${sheet ? '-sheet' : ''}`, { model: false, shell: 'stage', setup: seedArch(), run: context => castFitAt(context, locale, width, sheet) }]))),
 
   /** lane 6：清空此节出现危险确认；after 取消，界面与数据库里的世界观都没变。 */
   'arch-clear': { model: false, shell: 'stage', setup: seedArch(), run: async context => {

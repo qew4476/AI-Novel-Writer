@@ -13,7 +13,7 @@ import { DRAFT_SHORT_OUTLINE_PURPOSE, draftShortOutlineBlock, stripDraftShortOut
 import { GenerationRunRepository, textHash, type DurableGenerationRun, type RunBinding, type GenerationExecutionReceipt } from '../repositories/generation-run-repository'
 import { getCurrentProjectPath } from '../database'
 import { ModelExecutionLeaseRegistry } from './model-execution-lease'
-import { createGenerationRunService, type GenerationRunServiceDependencies } from './generation-run-service'
+import { createGenerationRunService, GENERATION_STOPPED, type GenerationRunServiceDependencies } from './generation-run-service'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
 import { assertSemanticGenerationTask, buildMainGenerationPlan, MAIN_GENERATION_POLICY, newMainGenerationPolicy, planningGenerationScope, readMainGenerationPolicy, type MainGenerationPlan, type MainGenerationPolicy } from './main-generation-plan'
 import { LLMFactory } from '../llm/llm-factory'
@@ -261,7 +261,8 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       record(result.finishReason === 'stop', result.usage, result.finishReason === 'stop' ? undefined : `finish:${result.finishReason ?? 'unknown'}`)
       return result
     } catch (error) {
-      record(false, null, error instanceof Error ? error.message : String(error))
+      if (options.signal.reason === GENERATION_STOPPED) recordCancelled()
+      else record(false, null, error instanceof Error ? error.message : String(error))
       throw error
     }
   }
@@ -801,7 +802,9 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         writeState = projectGenerationInFlight() ? { kind: 'blocked', reason: 'in-flight' } : { kind: 'ready' }
       }
     } catch { /* Frozen proposals remain readable when current sources are unavailable. */ }
-    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft,
+    const batch = outline.cursor.kind === 'complete' ? outline.composition?.text.trim() : undefined
+    const inFormalOutline = !!batch && (ProjectCoreRepository.get(deps.database)?.synopsis ?? '').includes(batch)
+    return { sourceHandle: handleOf(run), leaseEpoch: deps.epoch, draft, inFormalOutline,
       completeChapters: [...(outline.composition?.chapters?.map(chapter => chapter.chapterNumber) ?? []),
         ...(outline.cursor.kind === 'accept' ? [outline.cursor.chapterNumber] : [])],
       writeState, saved }

@@ -600,7 +600,7 @@ describe('explicit planning recovery with real SQLite', () => {
       newCharacterCandidates: characters.map(name => ({ name, role: 'supporting' as const })),
       userGuidance: '  作者指导保留原字节。\r\n', notes: '<think>作者备注中的原文标签</think>\n第二行。', notesUpdatedAt: '2026-10-04T13:00:00.000Z' }
     const request: BlueprintRangeCommitRequest = { mode: 'replace-range', operationId: 'author-blueprint', startChapter: 1, endChapter: 1,
-      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
+      blueprints: parseTextBlueprintsStrict(JSON.stringify([repaired]), 1, 1, 'zh-CN', 'author'), authorRecovery: { sourceHandle: run.handle, leaseEpoch: context.blueprintRecovery!.leaseEpoch } }
     const save = () => f.db.transaction(() => f.owner.commitBlueprintAuthorEdit(request)).immediate()
     const saved = save()
     expect(saved.authorEdit).toMatchObject({ committedRange: { from: 1, to: 1 }, remainingRange: { from: 2, to: 3 } })
@@ -2912,4 +2912,28 @@ it('rejects old subscription runs after account switching and project reopen', a
   const next = reopened.begin({ ...f.begin, uiActionNonce: 'new-account-task' })
   await reopened.execute({ handle: next.handle, invocationNonce: 'new-first', task })
   expect(dispatch).toHaveBeenCalledTimes(2)
+})
+
+describe('大纲恢复稿是否已写进正式大纲', () => {
+  it.each([['正常保存过', true, false], ['正式保存被拒', false, false], ['重写正式大纲里已有的章、正式保存被拒', false, true]] as const)('一批写完后来源变了（%s）：恢复稿如实标出这一批是否已在正式大纲里', async (_case, save, rewrite) => {
+    const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async (request, options) => {
+      const chapter = Number((request as { task: GenerationTask }).task.purpose.split(':')[2])
+      options.onVisible({ kind: 'delta', text: outlineEntry(chapter) })
+      return { finishReason: 'stop', usage: null }
+    })
+    const f = fixture(dispatch)
+    f.db.prepare('UPDATE project_core SET total_chapters=?').run(1)
+    if (rewrite) f.db.prepare('UPDATE project_core SET synopsis=?').run(renderPlotOutlineSynopsis('## 第1章：旧的一夜\n林岚第一次到旧港。', 1, { totalChapters: 1, writingLanguage: 'zh-CN' }))
+    const run = f.owner.begin(outlineSelection(f, 1))
+    await f.owner.execute({ handle: run.handle, invocationNonce: 'outline-1', task: outlineTask(f.owner.read(run.handle).plotOutline!) })
+    acceptOutline(f.owner, run.handle)
+    const progress = f.owner.readContext(run.handle).plotOutline!
+    const synopsis = renderPlotOutlineRange(progress.composition!.text, progress.range, progress.sourceExpected)
+    if (save) f.db.transaction(() => f.owner.assertSynopsisCommit(run.handle, synopsis, progress.sourceExpected)
+      || ProjectCoreRepository.commitSynopsis({ synopsis, expected: progress.sourceExpected, generationRunHandle: run.handle }, f.db)).immediate()
+    f.db.exec("UPDATE project_core SET premise='作者已修改前提' WHERE id='main'")
+    const context = f.owner.readContext(run.handle)
+    expect(context.plotOutline!.cursor).toEqual({ kind: 'complete' })
+    expect(context.plotOutlineRecovery).toMatchObject({ writeState: { kind: 'blocked', reason: 'source-changed' }, saved: null, inFormalOutline: save })
+  })
 })

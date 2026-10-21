@@ -159,6 +159,36 @@ describe('角色名单', () => {
     expect({ overlap, clipped, lines, footClipped }).toEqual({ overlap: false, clipped: [], lines: 1, footClipped: false })
   })
 
+  // 740 与 994 是 1024、1280 宽窗口里角色名单页实测的宽度，600 是 1280 宽窗口开着运行侧页时的宽度（#465）。
+  const fitCases = (['en-US', 'zh-CN'] as const).flatMap(locale => [600, 740, 994].map(width => ({ locale, width })))
+  it.each(fitCases)('$locale 界面、名单页 $width 宽：按钮不超出名单栏，定位下拉框放得下每个选项，档案首行的输入框都留得出写字的地方', async ({ locale, width }) => {
+    useLocaleStore.setState({ locale })
+    useCharacterStore.setState({ characters: [linzhou] })
+    host!.style.width = `${width}px`
+    await render()
+    const roster = host!.querySelector('.cast-roster')!.getBoundingClientRect()
+    const overflowing = [...host!.querySelectorAll<HTMLElement>('.cast-roster-actions .pi-btn')]
+      .filter(button => button.getBoundingClientRect().right > roster.right)
+      .map(button => button.textContent)
+    // 原生下拉框的箭头画在内容区里：同样样式、只含这一个选项、按内容取宽的副本有多宽，选中它时就要多宽才放得下。
+    const select = host!.querySelector<HTMLSelectElement>('.cast-select')!
+    const clippedRoles = [...select.options].filter(option => {
+      const probe = select.cloneNode(false) as HTMLSelectElement
+      probe.append(option.cloneNode(true))
+      probe.style.cssText = 'position: absolute; visibility: hidden; width: auto; min-width: 0'
+      select.parentElement!.append(probe)
+      const needed = probe.getBoundingClientRect().width
+      probe.remove()
+      return needed > select.getBoundingClientRect().width
+    }).map(option => option.textContent)
+    // 至少放得下三个汉字。
+    const crampedInputs = [...host!.querySelectorAll<HTMLInputElement>('.cast-row-fields input')].filter(input => {
+      const style = getComputedStyle(input)
+      return input.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) < 3 * parseFloat(style.fontSize)
+    }).map(input => input.closest('.cast-field')?.querySelector('label')?.textContent)
+    expect({ overflowing, clippedRoles, crampedInputs }).toEqual({ overflowing: [], clippedRoles: [], crampedInputs: [] })
+  })
+
   it('名单列出全部角色，改动后保存角色走名单的保存', async () => {
     await render()
     const rows = [...host!.querySelectorAll('.cast-row')].map(row => row.querySelector('.cast-row-name')?.textContent)
@@ -358,15 +388,37 @@ describe('角色名单', () => {
     expect(button('选择头像')).toBeTruthy()
   })
 
-  it.each(['zh-CN', 'en-US'] as const)('1024 宽窗口里档案标题不被保存按钮挤掉，名字完整显示（%s）', async locale => {
+  // 角色名单页宽：1024 宽窗口约 738px，1280 宽约 994px（窗口宽减去流程脊与边距）。
+  const profileHeadCases = (['zh-CN', 'en-US'] as const).flatMap(locale => ([[1024, 738], [1280, 994]] as const)
+    .flatMap(([windowWidth, pageWidth]) => [
+      { locale, windowWidth, pageWidth, name: '林舟', expected: { clipped: false, wrapped: false } },
+      { locale, windowWidth, pageWidth, name: '林舟远赴北境寻找失踪灯塔的守灯人', expected: { wrapped: true } },
+    ]))
+  it.each(profileHeadCases)('档案头按内容换行：$windowWidth 宽、$locale、名字「$name」', async ({ locale, pageWidth, name, expected }) => {
     useLocaleStore.setState({ locale })
-    host!.style.width = '738px'
+    useCharacterStore.setState({ characters: [{ ...linzhou, name }, shenyan] } as never)
+    host!.style.width = `${pageWidth}px`
     await render()
-    const name = host!.querySelector<HTMLElement>('.cast-profile-name')!
+    const title = host!.querySelector<HTMLElement>('.cast-profile-name')!
     const save = button(locale === 'en-US' ? 'Save character' : '保存角色')!
-    const [nameBox, saveBox] = [name.getBoundingClientRect(), save.getBoundingClientRect()]
-    const overlap = nameBox.left < saveBox.right && saveBox.left < nameBox.right && nameBox.top < saveBox.bottom && saveBox.top < nameBox.bottom
-    expect({ text: name.textContent, clipped: name.scrollWidth > name.clientWidth + 1, overlap }).toEqual({ text: '林舟', clipped: false, overlap: false })
+    const [titleBox, saveBox] = [title.getBoundingClientRect(), save.getBoundingClientRect()]
+    const avatarBox = host!.querySelector<HTMLElement>('.cast-profile-avatar')!.getBoundingClientRect()
+    const overlap = titleBox.left < saveBox.right && saveBox.left < titleBox.right && titleBox.top < saveBox.bottom && saveBox.top < titleBox.bottom
+    const observed = { clipped: title.scrollWidth > title.clientWidth + 1, wrapped: saveBox.top >= titleBox.bottom }
+    // 名字总和头像在同一行，不会自己掉到头像下面。
+    const besideAvatar = titleBox.top < avatarBox.bottom && titleBox.left >= avatarBox.right
+    expect({ text: title.textContent, overlap, besideAvatar, ...('clipped' in expected ? observed : { wrapped: observed.wrapped }) })
+      .toEqual({ text: name, overlap: false, besideAvatar: true, ...expected })
+  })
+
+  it.each(['zh-CN', 'en-US'] as const)('没有选中角色时的档案头没有头像，标题不按头像扣宽度（%s）', async locale => {
+    useLocaleStore.setState({ locale })
+    useCharacterStore.setState({ characters: [], selectedId: null } as never)
+    host!.style.width = '600px'
+    await render()
+    const title = host!.querySelector<HTMLElement>('.cast-profile-name')!
+    expect({ avatar: host!.querySelector('.cast-profile-avatar'), text: title.textContent, clipped: title.scrollWidth > title.clientWidth + 1 })
+      .toEqual({ avatar: null, text: locale === 'en-US' ? 'Character profile' : '角色档案', clipped: false })
   })
 
   it('1024 宽窗口里的关系图谱：工具条与人物侧栏的控件都在图谱框里、点得到；宽时显示中心人物', async () => {
