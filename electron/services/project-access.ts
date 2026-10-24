@@ -1,3 +1,4 @@
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { probeProjectSqlite } from './sqlite-project-migration'
@@ -163,7 +164,7 @@ export class ProjectAccessService {
     if (fs.existsSync(storageRoot) && (fs.lstatSync(storageRoot).isSymbolicLink() || !fs.lstatSync(storageRoot).isDirectory())) throw new Error('项目存储目录越界或为链接，已拒绝打开')
     const manifestPath = path.join(rootPath, hasCanonical ? PROJECT_MANIFEST_RELATIVE_PATH : path.join('.vela', 'project.json'))
     if (fs.existsSync(manifestPath) && fs.statSync(manifestPath).isFile()) {
-      if (fs.lstatSync(manifestPath).isSymbolicLink() || fs.lstatSync(manifestPath).nlink !== 1) throw new Error('项目清单为链接，已拒绝打开')
+      if (fs.lstatSync(manifestPath).isSymbolicLink() || !hasSupportedProjectLinkCount(fs.lstatSync(manifestPath).nlink)) throw new Error('项目清单为链接，已拒绝打开')
       this.assertProjectChildPath(rootPath, manifestPath, '项目清单')
       let parsed: unknown
       try {
@@ -184,7 +185,7 @@ export class ProjectAccessService {
       }
       if (hasCanonical && fs.existsSync(migrationJournal)) {
         const info = fs.lstatSync(migrationJournal)
-        if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+        if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
         const receipt = JSON.parse(fs.readFileSync(migrationJournal, 'utf8'))
         if (receipt.version !== 1 || receipt.phase !== 'switched' || receipt.projectId !== (parsed as ProjectManifest).projectId) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
       }

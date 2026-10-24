@@ -1,3 +1,4 @@
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import { CURRENT_DESKTOP_SCHEMA_VERSION } from '../migrations/desktop-registry'
 import fs from 'node:fs'
 import path from 'node:path'
@@ -95,7 +96,7 @@ export function authorizeSyntheticProjectMigration(fixtureRoot: string): Synthet
 }
 function regular(file: string): void {
   const info = fs.lstatSync(file)
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) fail('PROJECT_MIGRATION_UNSAFE_FILE')
+  if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)) fail('PROJECT_MIGRATION_UNSAFE_FILE')
 }
 function entryExists(file: string): boolean {
   try { fs.lstatSync(file); return true } catch (error) { if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false; throw error }
