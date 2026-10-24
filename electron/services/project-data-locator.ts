@@ -1,3 +1,4 @@
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
@@ -16,7 +17,7 @@ function manifestState(projectPath: string) {
     cursor = path.dirname(cursor)
   }
   const file = path.join(root, 'project.json'), info = fs.lstatSync(file)
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('PROJECT_MANIFEST_INVALID')
+  if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)) throw new Error('PROJECT_MANIFEST_INVALID')
   const bytes = fs.readFileSync(file), manifest = parseCanonicalProjectManifest(JSON.parse(bytes.toString('utf8')))
   const control = path.join(projectPath, '.ai-novel-migration')
   if (fs.existsSync(control)) {
@@ -26,7 +27,7 @@ function manifestState(projectPath: string) {
   const journalFile = path.join(projectPath, '.ai-novel-migration', 'journal.json')
   if (fs.existsSync(journalFile)) {
     const journalInfo = fs.lstatSync(journalFile)
-    if (!journalInfo.isFile() || journalInfo.isSymbolicLink() || journalInfo.nlink !== 1) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
+    if (!journalInfo.isFile() || journalInfo.isSymbolicLink() || !hasSupportedProjectLinkCount(journalInfo.nlink)) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
     const journal = JSON.parse(fs.readFileSync(journalFile, 'utf8'))
     if (journal.version !== 1 || journal.phase !== 'switched' || journal.projectId !== manifest.projectId) throw new Error('PROJECT_MIGRATION_RECOVERY_REQUIRED')
   }

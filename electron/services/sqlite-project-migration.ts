@@ -1,3 +1,4 @@
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import fs from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
@@ -45,7 +46,7 @@ export interface ProjectSqliteEvidence {
 
 function regular(file: string): void {
   const info = fs.lstatSync(file)
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1) throw new Error('PROJECT_MIGRATION_UNSAFE_FILE')
+  if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)) throw new Error('PROJECT_MIGRATION_UNSAFE_FILE')
 }
 function safeDirectory(directory: string, allowMissing = false): void {
   let parent = path.resolve(directory)

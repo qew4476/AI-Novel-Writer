@@ -1,3 +1,4 @@
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -65,7 +66,7 @@ function contained(root: string, child: string): boolean {
 
 function regularFile(file: string, root: string): fs.BigIntStats {
   const info = fs.lstatSync(file, { bigint: true })
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1n) throw new Error('PROJECT_PEEK_UNSAFE_FILE')
+  if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)) throw new Error('PROJECT_PEEK_UNSAFE_FILE')
   const canonical = path.normalize(fs.realpathSync.native(file))
   if (!contained(root, canonical)) throw new Error('PROJECT_PEEK_FILE_OUTSIDE_ROOT')
   return info
