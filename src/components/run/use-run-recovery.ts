@@ -30,7 +30,7 @@ async function loadGenerationSources(session: ProjectSessionContext): Promise<{ 
     ipc.invokeWithProjectSession(session, 'generation:list'),
     ipc.invokeWithProjectSession(session, 'generation:list-batches'),
   ])
-  const contexts = await Promise.all(views.map(async view => ({ view,
+  const contexts = await Promise.all(views.filter(view => view.operation !== 'agent-round').map(async view => ({ view,
     recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
   })))
   const reviews = await Promise.allSettled(contexts.filter(item => REVIEW_OPERATIONS.includes(item.recovery.operation))
