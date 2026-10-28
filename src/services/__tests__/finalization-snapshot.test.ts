@@ -33,6 +33,20 @@ function draftTab(overrides: Partial<EditorTab> = {}): EditorTab {
 }
 
 describe('finalization editor snapshot seam', () => {
+  it('adopts an independent final version only for the frozen source tab', () => {
+    const tab = draftTab()
+    const snapshot = captureFinalizationSnapshot({ tab, projectSession: SESSION, chapterTitle: '第一章' })
+    const completion = { sourceDraftId: 17, draftId: 18, finalizationId: 'draft-version-17',
+      contentHash: 'hash', contentRevision: snapshot.contentRevision, projectPath: PROJECT_PATH,
+      projectSession: SESSION, publicationStatus: 'published' as const }
+    expect(reconcileFinalizationCompletion(tab, snapshot, completion)).toMatchObject({
+      id: tab.id, draftId: 18, filePath: 'ai-novel://draft/18', draftStatus: 'finalized', dirty: false,
+    })
+    const other = draftTab({ draftId: 19 })
+    expect(reconcileFinalizationCompletion(other, snapshot, completion)).toBe(other)
+    expect(reconcileFinalizationCompletion(draftTab({ content: '后续修改', contentRevision: 10 }), snapshot, completion))
+      .toMatchObject({ draftId: 17, content: '后续修改', dirty: true, finalizationConflict: { finalizationId: completion.finalizationId } })
+  })
   it('commits a positive source revision for a first edit and preserves a later edit', () => {
     const first = draftTab({ contentRevision: 0 })
     const snapshot = captureFinalizationSnapshot({

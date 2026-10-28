@@ -54,6 +54,7 @@ export function registerFinalizationController(): void {
       }
       const active = projectAccess.assertCurrentProjectContext(context, getCurrentProjectPath())
       return await finalizationService.finalize({
+        createVersion: true,
         projectRoot: active.rootPath,
         draftId: candidate.draftId,
         chapterNumber: candidate.chapterNumber,

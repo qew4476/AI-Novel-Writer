@@ -69,6 +69,8 @@ export interface EventPayloadMap {
     runId: string
   }
   'FINALIZE_COMPLETE': {
+      /** Saved source version, when finalization created an independent version. */
+      sourceDraftId?: number
     /** 触发定稿的编辑器 Tab；完成事件只能结算这个冻结目标。 */
     tabId: string
     chapterNumber: number

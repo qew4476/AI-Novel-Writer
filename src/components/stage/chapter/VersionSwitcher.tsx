@@ -50,7 +50,7 @@ export default function VersionSwitcher({ tab, current, label, title, onSave }: 
   const sorted = [...drafts].sort((a, b) => b.version - a.version)
   const active = sorted.filter(draft => draft.status !== 'archived')
   const archived = sorted.filter(draft => draft.status === 'archived')
-  const shown = showArchived ? [...active, ...archived] : active
+  const shown = showArchived ? sorted : active
 
   useEffect(() => {
     if (open) layerRef.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus()

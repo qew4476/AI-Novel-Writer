@@ -447,7 +447,10 @@ function isCurrentMergedCycle(cycleId: string, mergedHash: string, db: Database.
       (SELECT MAX(newer.revision_index) FROM revisions newer
         WHERE newer.base_draft_id=v.base_draft_id AND newer.status='merged') AS latest_merged_index
     FROM review_cycles rc JOIN revisions v ON v.id=rc.revision_id
-    JOIN drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id WHERE rc.cycle_id=?`)
+    JOIN drafts d ON d.id=v.base_draft_id JOIN contents c ON c.id=d.content_id
+    WHERE rc.cycle_id=? AND d.status IN ('draft','reviewed','revised')
+      AND d.version = (SELECT MAX(newer.version) FROM drafts newer
+        WHERE newer.chapter_number=d.chapter_number AND newer.status <> 'archived')`)
     .get(cycleId) as { body: string; revision_index: number; latest_merged_index: number | null } | undefined
   return Boolean(current && current.revision_index === current.latest_merged_index
     && hash(current.body) === mergedHash)

@@ -308,13 +308,14 @@ function syncFinalizedDraftTab(payload: EventPayloadMap['FINALIZE_COMPLETE']): v
     tabId: payload.tabId,
     projectPath: payload.projectPath,
     projectSession: payload.projectSession,
-    draftId: payload.draftId,
+    draftId: payload.sourceDraftId ?? payload.draftId,
     chapterNumber: payload.chapterNumber,
     chapterTitle: payload.chapterTitle,
     content: payload.snapshotContent,
     contentRevision: payload.contentRevision,
   }
   const completion: FinalizationCompletion = {
+    sourceDraftId: payload.sourceDraftId,
     finalizationId: payload.finalizationId,
     contentHash: payload.contentHash,
     contentRevision: payload.contentRevision,

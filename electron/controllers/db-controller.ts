@@ -917,7 +917,7 @@ export function registerDatabaseController() {
     }
   })
 
-  ipcMain.handle('db:draft-update-content', async (_event, id: number, content: string, wordCount: number, expectedProjectPath: string) => {
+  ipcMain.handle('db:draft-update-content', async (_event, id: number, content: string, wordCount: number, expectedProjectPath: string, createVersion = false) => {
     try {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const draft = DraftRepository.getMeta(id)
@@ -925,8 +925,8 @@ export function registerDatabaseController() {
       if (draft.status === 'finalized') {
         throw new Error('DRAFT_FINALIZED_READ_ONLY')
       }
-      DraftRepository.updateContent(id, content, wordCount)
-      return { success: true }
+      const saved = DraftRepository.updateContent(id, content, wordCount, createVersion)
+      return { success: true, ...saved }
     } catch (err) {
       return { success: false, error: String(err) }
     }

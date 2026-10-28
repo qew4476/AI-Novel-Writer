@@ -488,6 +488,7 @@ export class FinalizeChapterCommand extends BaseWorkflowCommand<void> {
     // 将数据库定稿回滚为 draft，更不能让旧完成结果覆盖后续编辑。
     const { globalEventBus } = await import('../../../shared/event-bus')
     globalEventBus.emit('FINALIZE_COMPLETE', {
+      sourceDraftId: snapshot.draftId,
       tabId: snapshot.tabId,
       chapterNumber: snapshot.chapterNumber,
       chapterTitle: snapshot.chapterTitle,

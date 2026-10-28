@@ -277,7 +277,7 @@ export default function StageHistory({ projectKey }: { projectKey: string }) {
                 <ArrowRight size={14} aria-hidden="true" />
                 <span className="stage-hist-tag">{text('当前', 'Current')} · {versionName(latest, text)}</span>
               </div>
-              {selected !== latest && (
+              {(selected !== latest || selected.type === 'final') && (
                 <Button variant="secondary" onClick={() => setRevertOpen(true)}>
                   <RotateCcw size={14} aria-hidden="true" />{text('回退到此版本…', 'Revert to this version…')}
                 </Button>

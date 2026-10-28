@@ -94,8 +94,14 @@ export function createChapterBackend() {
       case 'db:draft-get-full': { const draft = byId(args[0]); return draft ? { ...meta(draft), content: draft.content } : null }
       case 'db:draft-update-content': {
         const draft = byId(args[0])
+        if (draft && args[4] === true && draft.content !== String(args[1])) {
+          const version = Math.max(...state.drafts.filter(item => item.chapterNumber === draft.chapterNumber).map(item => item.version)) + 1
+          const next = { ...draft, id: ++state.nextId, version, status: 'draft' as const, content: String(args[1]), updatedAt: now() }
+          state.drafts.push(next)
+          return { success: true, id: next.id, version }
+        }
         if (draft) Object.assign(draft, { content: String(args[1]), updatedAt: now() })
-        return { success: Boolean(draft) }
+        return { success: Boolean(draft), id: draft?.id, version: draft?.version }
       }
       case 'db:draft-delete': {
         state.drafts = state.drafts.filter(draft => draft.id !== Number(args[0]))

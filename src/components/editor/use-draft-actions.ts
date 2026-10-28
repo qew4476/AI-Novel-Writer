@@ -14,7 +14,7 @@ import {
 } from '../../services/workflows/chapter-workflow'
 import { getPendingRevisions, getReviewsForVersion, type ReviewEntry, type RevisionEntry } from '../../services/draft-index'
 import { isRevisionSourceCurrent, refreshChapterFacts } from '../../stores/navigation/chapter-facts'
-import { readDraftBody } from '../../stores/draft-store'
+import { readDraftBody, useDraftStore } from '../../stores/draft-store'
 import { ipc } from '../../services/ipc-client'
 import { retryFinalizationPublication } from '../../services/finalization-client'
 import { captureFinalizationSnapshot } from '../../services/finalization-snapshot'
@@ -80,6 +80,8 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   const [saving, setSaving] = useState(false)
   const [saveOutcome, setSaveOutcome] = useState<SaveOutcome>('idle')
   const currentBodyRef = useRef(content)
+  const savedVersionRef = useRef<{ id: number; version: number; status: DraftStatus } | null>(null)
+  const saveQueue = useRef<Promise<void>>(Promise.resolve())
 
   const reload = useCallback(() => setReloadKey(key => key + 1), [])
   // 打开修稿合并要先读修订与源稿；读的过程中作者关掉了合并或已合并完，晚到的结果不再摆出来。
@@ -120,7 +122,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     return () => {
       cancelled = true
     }
-  }, [currentProject, filePath, projectKey, reloadKey])
+  }, [currentProject, filePath, projectKey, reloadKey, tabDraftStatus])
 
   // 审稿、修稿、定稿等工作流结束后，这一稿的审稿记录与待合并修稿可能变了。
   useEffect(() => globalEventBus.on('WORKFLOW_COMPLETE', ({ projectSession }) => {
@@ -150,7 +152,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   }
 
   /** 保存（ai-novel://draft/ 走 DB，其他走 FS） */
-  const save = async (draftContent: string, propagateFailure = false) => {
+  const saveNow = async (draftContent: string, propagateFailure = false) => {
     const projectSession = captureProjectSession(currentProject)
     if (!projectMatches || !projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     const targetTab = useEditorStore.getState().tabs.find(
@@ -170,8 +172,9 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     setSaving(true)
     setSaveOutcome('idle')
     try {
-      const resource = parseResourceUri(filePath)
-      if (!resourceWriteAllowed(filePath) || resource?.kind !== 'draft') throw new Error(text('资源只读或无效', 'This resource is read-only or invalid.'))
+      const targetPath = targetTab.filePath ?? filePath
+      const resource = parseResourceUri(targetPath)
+      if (!resourceWriteAllowed(targetPath) || resource?.kind !== 'draft') throw new Error(text('资源只读或无效', 'This resource is read-only or invalid.'))
       const result = await ipc.invokeWithProjectSession(
         projectSession,
         'db:draft-update-content',
@@ -179,19 +182,38 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         saveSnapshot.content,
         countDraftUnits(saveSnapshot.content),
         projectSession.projectPath,
+        true,
       )
       if (!result.success) throw new Error(result.error || text('草稿保存失败', 'Could not save the draft'))
       if (!isProjectSessionCurrent(projectSession)) return
       const currentTab = useEditorStore.getState().tabs.find(
         tab => tab.id === tabId && tab.projectKey === projectKey,
       )
-      if (currentTab) {
+      if (currentTab && currentTab.filePath === targetPath) {
+        if (result.version !== undefined && result.id !== undefined) {
+          const version = result.version
+          const id = result.id
+          savedVersionRef.current = { id, version, status: id === resource.id ? currentTab.draftStatus ?? meta?.status ?? 'draft' : 'draft' }
+          setMeta(previous => previous ? { ...previous, id, version, status: id === resource.id ? previous.status : 'draft', filePath: formatResourceUri({ kind: 'draft', id }) } : previous)
+        }
+        if (result.id !== undefined && result.id !== resource.id) {
+          setLoaded(false)
+          setReviews([])
+          setPendingRevisions([])
+          const nextPath = formatResourceUri({ kind: 'draft', id: result.id })
+          useEditorStore.setState(state => ({ tabs: state.tabs.map(tab => tab.id === tabId
+            ? { ...tab, draftId: result.id, filePath: nextPath, draftStatus: 'draft' }
+            : tab) }))
+        }
         useEditorStore.getState().settleTabSave(currentTab.id, saveSnapshot)
         const settledTab = useEditorStore.getState().tabs.find(tab => tab.id === currentTab.id)
         setSaveOutcome(settledTab?.dirty ? 'idle' : 'saved')
       }
       // 待合并的修稿按保存的正文判断能否合并，正文变了就要重读。
-      if (pendingRevisions.length > 0) reload()
+      reload()
+      if (meta) await useDraftStore.getState().loadChapterDrafts(meta.chapterNumber, projectKey, projectSession)
+      if (!isProjectSessionCurrent(projectSession)) return
+      globalEventBus.emit('REFRESH_RESOURCE', { resources: ['drafts'], projectPath: projectKey, projectSession })
     } catch (error) {
       if (isProjectSessionCurrent(projectSession)) {
         setSaveOutcome('failed')
@@ -201,6 +223,14 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     } finally {
       if (isProjectSessionCurrent(projectSession)) setSaving(false)
     }
+  }
+
+  // Repeated shortcuts may arrive before the preceding IPC response. Each save
+  // reads the tab's latest persisted ID only after the previous one settles.
+  const save = (draftContent: string, propagateFailure = false): Promise<void> => {
+    const pending = saveQueue.current.then(() => saveNow(draftContent, propagateFailure))
+    saveQueue.current = pending.catch(() => undefined)
+    return pending
   }
 
   const exitSaveRef = useRef(save)
@@ -229,16 +259,19 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
       return null
     }
     const body = targetTab.content ?? currentBodyRef.current
+    // Saving creates a version. Freeze the resulting version, rather than the
+    // metadata from before the save, for the generation admission checks.
+    if (targetTab.dirty) await save(body, true)
+    if (!isProjectSessionCurrent(projectSession)) return null
+    const saved = targetTab.dirty ? savedVersionRef.current : null
     const sourceDraft = Object.freeze({
-      id: meta.id,
+      id: saved?.id ?? meta.id,
       chapterNumber: meta.chapterNumber,
-      version: meta.version,
-      status: targetTab.draftStatus ?? meta.status,
+      version: saved?.version ?? meta.version,
+      status: saved?.status ?? targetTab.draftStatus ?? meta.status,
       contentRevision: targetTab.contentRevision ?? 0,
     })
 
-    if (targetTab.dirty) await save(body, true)
-    if (!isProjectSessionCurrent(projectSession)) return null
     return Object.freeze({ body, sourceDraft })
   }
 
@@ -281,7 +314,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         projectPath: projectSession.projectPath,
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
-        draftPath: filePath,
+        draftPath: formatResourceUri({ kind: 'draft', id: source.sourceDraft.id }),
         draftContent: source.body,
         sourceDraft: source.sourceDraft,
         userRefinePrompt: userRefinePrompt.trim() || undefined,
@@ -308,7 +341,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
         projectPath: projectSession.projectPath,
         chapterNumber: meta.chapterNumber,
         chapterTitle: meta.chapterTitle ?? '未知标题',
-        draftPath: filePath,
+        draftPath: formatResourceUri({ kind: 'draft', id: source.sourceDraft.id }),
         draftContent: source.body,
         sourceDraft: source.sourceDraft,
         reviewFocus,

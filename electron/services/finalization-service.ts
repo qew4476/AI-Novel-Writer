@@ -13,6 +13,7 @@ import {
 import { PortableRuntimeFreezeError, readPortableRuntimeFreeze } from './portable-runtime-freeze'
 
 export interface FinalizationRequest {
+  createVersion?: boolean
   /** 已由 ProjectAccess 验证并 canonicalize 的项目根目录。 */
   projectRoot: string
   draftId: number
@@ -71,7 +72,7 @@ function hasSameFrozenRequest(
   request: FinalizationRequest,
   contentHash: string,
 ): boolean {
-  return record.draftId === request.draftId
+  return (request.createVersion || record.draftId === request.draftId)
     && record.chapterNumber === request.chapterNumber
     && record.chapterTitle === request.chapterTitle
     && record.contentRevision === request.contentRevision
@@ -99,11 +100,15 @@ export class FinalizationService {
   }
 
   async finalize(request: FinalizationRequest): Promise<FinalizationResult> {
-    const finalizationId = this.createFinalizationId()
+    // One finalization per immutable saved source. Lost responses and reopens
+    // reuse this key even though the final version has a different draft ID.
+    const finalizationId = request.createVersion ? `draft-version-${request.draftId}` : this.createFinalizationId()
     const contentHash = snapshotHash(request.content)
     let record: FinalizationRecord
     try {
-      const existing = FinalizationRepository.getByDraftId(request.draftId)
+      const existing = request.createVersion
+        ? FinalizationRepository.get(finalizationId)
+        : FinalizationRepository.getByDraftId(request.draftId)
       if (existing) {
         if (!hasSameFrozenRequest(existing, request, contentHash)) {
           return {
@@ -123,6 +128,7 @@ export class FinalizationService {
         finalizationId,
       })
       record = FinalizationRepository.commit({
+        createVersion: request.createVersion,
         finalizationId,
         draftId: request.draftId,
         chapterNumber: request.chapterNumber,

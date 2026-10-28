@@ -8,6 +8,7 @@ import { createHash } from 'node:crypto'
 import type BetterSqlite3 from 'better-sqlite3'
 import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
+import { createDraftVersion } from './draft-version'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
 
 const DRAFT_META_SELECT = `
@@ -485,23 +486,29 @@ export class DraftRepository {
         }
     }
 
-    /** 更新草稿正文（同时更新 contents 表） */
-    static updateContent(id: number, content: string, wordCount: number): void {
-        const meta = DraftRepository.getMeta(id)
-        if (!meta) return
-        if (meta.status === 'finalized') {
-            throw new Error('DRAFT_FINALIZED_READ_ONLY')
-        }
-
-        ContentRepository.updateBody(meta.contentId, content)
-
+    /** 手动保存建立版本；内部写入仍可原地更新。相同正文不重复建版。 */
+    static updateContent(id: number, content: string, wordCount: number, createVersion = false): { id: number; version: number } {
         const db = getProjectDb()
-        if (!db) return
+        if (!db) throw new Error('PROJECT_NOT_OPEN')
+        return db.transaction(() => {
+            const meta = DraftRepository.getMeta(id)
+            if (!meta) throw new Error('DRAFT_NOT_FOUND')
+            if (meta.status === 'finalized' || meta.status === 'archived') {
+                throw new Error('DRAFT_FINALIZED_READ_ONLY')
+            }
 
-        db.prepare(`
+            const saved = db.prepare('SELECT body FROM contents WHERE id = ?').get(meta.contentId) as { body: string }
+            if (saved.body === content) return { id, version: meta.version }
+            if (createVersion) return createDraftVersion(db, id, content, 'draft')
+
+            ContentRepository.updateBody(meta.contentId, content)
+
+            db.prepare(`
       UPDATE drafts SET word_count = ?, updated_at = datetime('now')
       WHERE id = ?
     `).run(wordCount, id)
+            return { id, version: meta.version }
+        })()
     }
 
     /** 删除草稿（级联删除 revisions/reviews，但 contents 需手动清理） */

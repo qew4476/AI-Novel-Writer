@@ -429,9 +429,10 @@ export default function ChapterActions({ sheetSlot, tab, stage, chapterNumber, t
         )}
       >
         <ul className="stage-ch-commit">
+          <li><b>{text('新增一版定稿。', 'Creates a final version.')}</b>{text('此前保存的草稿版本都会保留，可在版本历史中查看并回退。', 'Earlier saved drafts are kept in version history, where you can view them and create a rollback draft.')}</li>
           <li><b>{text('写入正文。', 'Writes the manuscript.')}</b>{text(`这 ${units} 字成为第 ${chapterNumber} 章正文，同时保存为正文文件。`, `This ${units}-word text becomes chapter ${chapterNumber} and is saved as the manuscript file.`)}</li>
           <li><b>{text('自动做定稿后处理。', 'Runs post-finalization steps.')}</b>{text('完成后在本章页面显示每一步的结果，失败的步骤可以单独重试。', 'Each step’s result appears on this chapter; a failed step can be retried on its own.')}</li>
-          <li><b>{text('之后不能直接修改。', 'No direct edits afterwards.')}</b>{text('要再改，从版本历史回退为新草稿。', 'To change it again, roll back to a new draft from version history.')}</li>
+          <li><b>{text('之后不能直接修改。', 'No direct edits afterwards.')}</b>{text('要再改，在版本历史中选择这份定稿，点击“回退到此版本”新建草稿；原定稿会保留。', 'To edit again, select this final in version history and choose “Revert to this version” to create a draft. The original final is kept.')}</li>
         </ul>
         {tab.dirty && <Notice tone="info" title={text('还没保存的修改会一并定稿', 'Unsaved edits are included')}>{text('定稿以你现在看到的正文为准。', 'Finalization uses the text exactly as you see it now.')}</Notice>}
       </InkDialog>

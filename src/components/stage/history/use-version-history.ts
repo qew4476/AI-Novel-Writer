@@ -43,12 +43,24 @@ export function useVersionHistory(projectKey: string) {
     if (!projectSession || !isProjectSessionPath(projectSession, projectKey)) return
     setLoading(true)
     try {
-      const blueprints = await ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', projectSession.projectPath)
+      const [blueprints, drafts] = await Promise.all([
+        ipc.invokeWithProjectSession(projectSession, 'db:blueprint-get-all', projectSession.projectPath),
+        ipc.invokeWithProjectSession(projectSession, 'db:draft-list-all', projectSession.projectPath),
+      ])
       if (!isProjectSessionCurrent(projectSession)) return
-      setChapters(blueprints.map(blueprint => ({
+      const byChapter = new Map(blueprints.map(blueprint => [blueprint.chapterNumber, {
         number: blueprint.chapterNumber,
         title: blueprint.title || text(`第 ${blueprint.chapterNumber} 章`, `Chapter ${blueprint.chapterNumber}`),
-      })))
+      }]))
+      for (const draft of drafts) {
+        if (!byChapter.has(draft.chapterNumber)) {
+          byChapter.set(draft.chapterNumber, {
+            number: draft.chapterNumber,
+            title: draft.chapterTitle || text(`第 ${draft.chapterNumber} 章`, `Chapter ${draft.chapterNumber}`),
+          })
+        }
+      }
+      setChapters([...byChapter.values()].sort((left, right) => left.number - right.number))
     } catch {
       if (isProjectSessionCurrent(projectSession)) setChapters([])
     } finally {

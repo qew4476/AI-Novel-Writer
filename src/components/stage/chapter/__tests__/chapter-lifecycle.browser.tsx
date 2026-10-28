@@ -131,6 +131,20 @@ describe('单章视图的主按钮随五种状态变化', () => {
     expect(started()).toHaveLength(1)
   })
 
+  it('未保存修改先建立新版本，AI 审稿使用保存后的草稿身份与版本', async () => {
+    const first = backend.addDraft({ status: 'draft', version: 1, content: ORIGINAL })
+    await mount()
+    await openDraft(first.id)
+    await act(async () => useEditorStore.getState().updateTabContent(useEditorStore.getState().activeTabId!, REVISED))
+    await click('AI 审稿')
+    await vi.waitFor(() => expect(workflows.createReviewOnlyWorkflow).toHaveBeenCalledOnce())
+    const [params] = workflows.createReviewOnlyWorkflow.mock.calls[0]
+    const saved = backend.state.drafts.find(draft => draft.version === 2)!
+    expect(params).toMatchObject({ draftContent: REVISED, draftPath: `ai-novel://draft/${saved.id}`,
+      sourceDraft: { id: saved.id, version: 2, status: 'draft' } })
+    expect(backend.state.drafts.find(draft => draft.id === first.id)).toMatchObject({ status: 'draft', content: ORIGINAL })
+  })
+
   it('草稿：提示里的保存快捷键按平台写，Windows 上是 Ctrl S 而不是 ⌘S', async () => {
     const draft = backend.addDraft({ status: 'draft' })
     await mount()

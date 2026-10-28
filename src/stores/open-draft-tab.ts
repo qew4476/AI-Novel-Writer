@@ -1,7 +1,7 @@
 import type { ProjectSessionContext } from '../shared/ipc-channels'
 import { getActiveProjectSessionContext, sameProjectSessionContext } from '../shared/project-session-context'
 import { readDraftBody, type DraftMeta } from './draft-store'
-import { useEditorStore } from './editor-store'
+import { createProjectScopedEditorTabId, useEditorStore } from './editor-store'
 
 /**
  * 读出一稿正文，打开它的标签或切到已开的标签。章节列表与导航都走这里。
@@ -15,8 +15,12 @@ export async function openDraftTab(
 ): Promise<boolean> {
   const content = await readDraftBody(draft.filePath, session.projectPath, session)
   if (!stillWanted() || !sameProjectSessionContext(session, getActiveProjectSessionContext())) return false
+  // A tab can follow a newly saved/finalized version while keeping its tab ID.
+  // Opening its original version must not reactivate that different resource.
+  const scopedId = createProjectScopedEditorTabId(draft.filePath, 'chapter', session.projectPath)
+  const idOccupied = useEditorStore.getState().tabs.some(tab => tab.id === scopedId && tab.filePath !== draft.filePath)
   useEditorStore.getState().openFile({
-    id: draft.filePath,
+    id: idOccupied ? `chapter-view:${crypto.randomUUID()}` : draft.filePath,
     name,
     type: 'chapter',
     filePath: draft.filePath,

@@ -2,11 +2,14 @@ import { createHash } from 'node:crypto'
 import { getCurrentProjectPath, getProjectDb } from '../database'
 import { readPortableRuntimeFreeze } from '../services/portable-runtime-freeze'
 import { countDraftUnits } from '../../src/shared/draft-units'
+import { createDraftVersion } from './draft-version'
 import { freezeFinalizedCharacterSnapshot, invalidateContinuityProjectionFrom } from './summary-repository'
 
 export type PublicationStatus = 'pending' | 'published'
 
 export interface FinalizationCommitInput {
+  /** Desktop finalization creates a separate version; legacy callers may finalize in place. */
+  createVersion?: boolean
   finalizationId: string
   draftId: number
   chapterNumber: number
@@ -110,7 +113,7 @@ function hasSameFinalizationInput(
   existing: FinalizationRow,
   input: FinalizationCommitInput,
 ): boolean {
-  return existing.draft_id === input.draftId
+  return (input.createVersion || existing.draft_id === input.draftId)
     && existing.chapter_number === input.chapterNumber
     && existing.chapter_title === input.chapterTitle
     && existing.content_hash === input.contentHash
@@ -237,8 +240,8 @@ export class FinalizationRepository {
     const db = requireDatabase()
     const transaction = db.transaction(() => {
       const existing = db.prepare(`
-        SELECT * FROM finalization_outbox WHERE draft_id = ?
-      `).get(input.draftId) as FinalizationRow | undefined
+        SELECT * FROM finalization_outbox WHERE ${input.createVersion ? 'finalization_id' : 'draft_id'} = ?
+      `).get(input.createVersion ? input.finalizationId : input.draftId) as FinalizationRow | undefined
       if (existing) {
         // renderer 可能在主进程已提交而响应丢失后重发同一冻结快照。此时新生成的
         // finalizationId/碰撞候选文件名都不能破坏幂等性，必须返回原提交。
@@ -271,13 +274,18 @@ export class FinalizationRepository {
       `).get(input.chapterNumber, input.draftId)
       if (replacesFinalized) invalidateContinuityProjectionFrom(db, input.chapterNumber)
 
-      db.prepare('UPDATE contents SET body = ? WHERE id = ?')
-        .run(input.content, draft.content_id)
-      db.prepare(`
-        UPDATE drafts
-        SET status = 'finalized', word_count = ?, updated_at = datetime('now')
-        WHERE id = ?
-      `).run(countDraftUnits(input.content), input.draftId)
+      const finalizedDraftId = input.createVersion
+        ? createDraftVersion(db, input.draftId, input.content, 'finalized').id
+        : input.draftId
+      if (!input.createVersion) {
+        db.prepare('UPDATE contents SET body = ? WHERE id = ?')
+          .run(input.content, draft.content_id)
+        db.prepare(`
+          UPDATE drafts
+          SET status = 'finalized', word_count = ?, updated_at = datetime('now')
+          WHERE id = ?
+        `).run(countDraftUnits(input.content), input.draftId)
+      }
       db.prepare(`
         INSERT INTO finalization_outbox (
           finalization_id, draft_id, chapter_number, chapter_title,
@@ -286,7 +294,7 @@ export class FinalizationRepository {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', '')
       `).run(
         input.finalizationId,
-        input.draftId,
+        finalizedDraftId,
         input.chapterNumber,
         input.chapterTitle,
         input.contentHash,
@@ -294,12 +302,12 @@ export class FinalizationRepository {
         input.content,
         input.targetFileName,
       )
-      freezeFinalizedCharacterSnapshot(db, { draftId: input.draftId, finalizationId: input.finalizationId,
+      freezeFinalizedCharacterSnapshot(db, { draftId: finalizedDraftId, finalizationId: input.finalizationId,
         chapterNumber: input.chapterNumber, contentHash: input.contentHash })
 
       return {
         finalizationId: input.finalizationId,
-        draftId: input.draftId,
+        draftId: finalizedDraftId,
         chapterNumber: input.chapterNumber,
         chapterTitle: input.chapterTitle,
         contentSnapshot: input.content,

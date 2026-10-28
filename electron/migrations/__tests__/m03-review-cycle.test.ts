@@ -358,10 +358,10 @@ describe('M03 review cycle migration', () => {
       db.transaction(() => applyM06ReviewCycleMerge(db))()
       vi.mocked(getProjectDb).mockReturnValue(db)
       const finalized = `${merged} 作者定稿。`
-      FinalizationRepository.commit({ finalizationId: 'finalized-cycle-1', draftId: seeded.draftId,
+      FinalizationRepository.commit({ createVersion: true, finalizationId: 'finalized-cycle-1', draftId: seeded.draftId,
         chapterNumber: 1, chapterTitle: '第一章', content: finalized, contentHash: hash(finalized),
         contentRevision: 1, targetFileName: '第一章.txt' })
-      expect(db.prepare('SELECT status FROM drafts WHERE id=?').pluck().get(seeded.draftId)).toBe('finalized')
+      expect(db.prepare('SELECT status FROM drafts WHERE id=?').pluck().get(seeded.draftId)).toBe('revised')
       expect(verifyM03ReviewCycle(db)).toBe(true)
       expect(ReviewCycleRepository.getByReviewId(seeded.reviewId, db)?.recheckCount).toBe(1)
       expect(() => ReviewCycleRepository.planRecheck('cycle-1', db)).toThrow('REVIEW_CYCLE_CONFLICT')

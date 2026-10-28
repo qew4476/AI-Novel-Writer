@@ -5,6 +5,7 @@ import {
 } from '../shared/project-session-context'
 import type { EditorTab } from '../stores/editor-store'
 import { useLocaleStore } from '../stores/locale-store'
+import { formatResourceUri } from '../shared/project-paths'
 
 export type FinalizationPublicationStatus = 'pending' | 'published'
 
@@ -24,6 +25,7 @@ export interface FinalizationSnapshot {
 }
 
 export interface FinalizationCompletion {
+  sourceDraftId?: number
   finalizationId: string
   contentHash: string
   contentRevision: number
@@ -83,7 +85,7 @@ export function reconcileFinalizationCompletion(
     && sameProjectPathKey(tab.projectKey, snapshot.projectPath)
     && sameProjectSessionContext(snapshot.projectSession, completion.projectSession)
     && sameProjectPathKey(completion.projectPath, snapshot.projectPath)
-    && completion.draftId === snapshot.draftId
+    && (completion.sourceDraftId ?? completion.draftId) === snapshot.draftId
     && completion.contentRevision === snapshot.contentRevision
   )
   if (!sameTarget) return tab
@@ -107,6 +109,8 @@ export function reconcileFinalizationCompletion(
 
   return {
     ...tab,
+    draftId: completion.draftId,
+    filePath: formatResourceUri({ kind: 'draft', id: completion.draftId }),
     savedContent: snapshot.content,
     dirty: false,
     draftStatus: 'finalized',

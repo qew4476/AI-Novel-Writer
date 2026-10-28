@@ -89,6 +89,28 @@ afterEach(async () => {
 })
 
 describe('版本切换器', () => {
+  it('保存建立下一版并保留旧正文，连续保存相同内容不再建版', async () => {
+    const first = backend.addDraft({ status: 'draft', version: 1, content: ORIGINAL })
+    await mount()
+    await openDraft(first.id)
+    await type(REVISED)
+    const saveKey = () => host!.querySelector<HTMLElement>('.cm-content')!.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }),
+    )
+    await act(async () => { saveKey(); saveKey() })
+    await vi.waitFor(() => expect(activeTab()?.dirty).toBe(false))
+    expect(backend.state.drafts.map(draft => ({ version: draft.version, status: draft.status, content: draft.content })))
+      .toEqual([
+        { version: 1, status: 'draft', content: ORIGINAL },
+        { version: 2, status: 'draft', content: REVISED },
+      ])
+    expect(activeTab()?.draftId).not.toBe(first.id)
+    expect(await versions()).toEqual(['草稿 v2 · 当前', '草稿 v1'])
+    await act(async () => page.getByRole('menuitemradio', { name: /草稿 v1/ }).click())
+    await vi.waitFor(() => expect(activeTab()?.content).toBe(ORIGINAL))
+    expect(activeTab()?.draftStatus).toBe('draft')
+  })
+
   it('切到另一稿时有未保存修改：先问；继续编辑什么都不动，保存并切换先写入再在原位置换上那一稿', async () => {
     const v1 = backend.addDraft({ status: 'archived', version: 1 })
     const v2 = backend.addDraft({ status: 'draft', version: 2, content: REVISED })

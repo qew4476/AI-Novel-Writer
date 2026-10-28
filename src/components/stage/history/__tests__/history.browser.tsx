@@ -203,7 +203,39 @@ describe('版本历史', () => {
     expect(channels()).not.toContain('db:draft-create')
   })
 
-  it('当前稿没有回退按钮', async () => {
+  it('只有一份当前定稿时也能新建可编辑草稿，保留原定稿', async () => {
+    drafts = [{ id: 11, chapterNumber: 3, version: 1, status: 'finalized', content: '定稿正文' }]
+    await act(async () => root!.render(<StageHistory projectKey={session.projectPath} />))
+    await vi.waitFor(() => expect(button(/雨夜车站/)).toBeTruthy())
+    await click(/雨夜车站/)
+    await vi.waitFor(() => expect(button(/定稿 v1/)).toBeTruthy())
+    await click(/定稿 v1/)
+    await vi.waitFor(() => expect(button('回退到此版本…')).toBeTruthy())
+    await click('回退到此版本…')
+    await click('新建回滚草稿')
+    await vi.waitFor(() => expect(button(/草稿 v2/)).toBeTruthy())
+    expect(drafts).toEqual([
+      { id: 11, chapterNumber: 3, version: 1, status: 'finalized', content: '定稿正文' },
+      { id: 101, chapterNumber: 3, version: 2, status: 'draft', content: '定稿正文' },
+    ])
+  })
+
+  it('没有对应蓝图的定稿也出现在历史中，并能读出正文新建草稿', async () => {
+    drafts = [{ id: 11, chapterNumber: 9, version: 1, status: 'finalized', content: '没有蓝图的定稿正文' }]
+    await act(async () => root!.render(<StageHistory projectKey={session.projectPath} />))
+    await vi.waitFor(() => expect(button(/第 9 章/)).toBeTruthy())
+    await click(/第 9 章/)
+    await vi.waitFor(() => expect(button(/定稿 v1/)).toBeTruthy())
+    await click(/定稿 v1/)
+    await vi.waitFor(() => expect(host!.querySelector('article')?.textContent).toContain('没有蓝图的定稿正文'))
+    await click('回退到此版本…')
+    await click('新建回滚草稿')
+    await vi.waitFor(() => expect(button(/草稿 v2/)).toBeTruthy())
+    expect(drafts[1]).toMatchObject({ chapterNumber: 9, status: 'draft', content: '没有蓝图的定稿正文' })
+    expect(drafts[0].status).toBe('finalized')
+  })
+
+  it('当前草稿没有回退按钮', async () => {
     await openChapterThree()
     await click(/草稿 v2/)
     await vi.waitFor(() => expect(host!.textContent).toContain('与当前稿相同'))
