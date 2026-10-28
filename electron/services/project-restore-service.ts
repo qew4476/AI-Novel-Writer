@@ -1,5 +1,6 @@
 import fs, { createReadStream } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 
@@ -131,6 +132,112 @@ function contained(root: string, candidate: string): boolean {
 
 function same(left: fs.BigIntStats, right: fs.BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino
+}
+
+function publishFileExclusive(source: string, target: string, reservationToken: string): void {
+  try { fs.linkSync(source, target) } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (!['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EACCES', 'EISDIR', 'EXDEV'].includes(code ?? '')) throw error
+    const pending = path.join(path.dirname(target), `.${path.basename(target)}.portable-restore-${reservationToken}.pending`)
+    const intent = fs.openSync(pending, 'wx', 0o600)
+    try { fs.fsyncSync(intent) } finally { fs.closeSync(intent) }
+    let descriptor: number
+    try { descriptor = fs.openSync(target, 'wx', 0o600) } catch (openError) {
+      fs.unlinkSync(pending)
+      throw openError
+    }
+    const identity = fs.fstatSync(descriptor, { bigint: true })
+    const receipt = path.join(path.dirname(target),
+      `.${path.basename(target)}.portable-restore-${reservationToken}.copy-${identity.dev}-${identity.ino}`)
+    let recorded = false
+    try {
+      // Persist ownership before writing bytes so a stopped copy can be removed without touching replacements.
+      const record = fs.openSync(receipt, 'wx', 0o600)
+      try { fs.fsyncSync(record) } finally { fs.closeSync(record) }
+      recorded = true
+      fs.unlinkSync(pending)
+      const input = fs.openSync(source, 'r')
+      try {
+        const buffer = Buffer.allocUnsafe(64 * 1024)
+        let length: number
+        while ((length = fs.readSync(input, buffer)) !== 0) fs.writeFileSync(descriptor, buffer.subarray(0, length))
+      } finally { fs.closeSync(input) }
+      fs.fsyncSync(descriptor)
+      fs.unlinkSync(receipt)
+    } catch (copyError) {
+      if (!recorded) {
+        unlinkIdentity(target, identity)
+        fs.unlinkSync(pending)
+      }
+      throw copyError
+    } finally { fs.closeSync(descriptor) }
+  }
+}
+
+function recoverCopiedPublications(journal: ReadInstallJournal, targetRoot: string): void {
+  const suffix = `.portable-restore-${journal.document.reservationToken}.copy-`
+  const visit = (directory: string) => {
+    physicalDirectory(directory)
+    const pendingSuffix = `.portable-restore-${journal.document.reservationToken}.pending`
+    for (const name of fs.readdirSync(directory)) {
+      if (!name.startsWith('.') || !name.endsWith(pendingSuffix)) continue
+      const basename = name.slice(1, -pendingSuffix.length)
+      if (!basename) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+      const pending = path.join(directory, name)
+      const intent = readPhysicalFile(pending, 0)
+      const hasReceipt = fs.readdirSync(directory).some(entry => entry.startsWith(`.${basename}${suffix}`))
+      if (!hasReceipt) {
+        const target = path.join(directory, basename)
+        if (fs.existsSync(target)) {
+          const current = fs.lstatSync(target)
+          if (!current.isFile() || current.isSymbolicLink()
+            || normalized(fs.realpathSync.native(target)) !== normalized(target)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+          // Without an inode receipt, preserve uncertain bytes outside the project instead of deleting them.
+          fs.renameSync(target, path.join(path.dirname(targetRoot), `.portable-restore-recovered-${randomUUID()}`))
+        }
+        if (target === path.join(targetRoot, INSTALL_MARKER_NAME)) {
+          fs.copyFileSync(journal.path, target, fs.constants.COPYFILE_EXCL)
+          const descriptor = fs.openSync(target, 'r+')
+          try { fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
+        }
+      }
+      unlinkIdentity(pending, intent.identity)
+    }
+    for (const child of fs.readdirSync(directory, { withFileTypes: true })) {
+      const name = child.name
+      const entry = path.join(directory, name)
+      const offset = name.lastIndexOf(suffix)
+      if (name.startsWith('.') && offset > 1) {
+        const identity = /^(\d+)-(\d+)$/u.exec(name.slice(offset + suffix.length))
+        const record = readPhysicalFile(entry, 0)
+        if (!identity) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+        const target = path.join(directory, name.slice(1, offset))
+        try {
+          const current = fs.lstatSync(target, { bigint: true })
+          if (current.dev !== BigInt(identity[1]) || current.ino !== BigInt(identity[2])) {
+            fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+          }
+          if (target === path.join(targetRoot, INSTALL_MARKER_NAME)) {
+            // Keep the recorded inode so another interruption during marker repair remains recoverable.
+            const descriptor = fs.openSync(target, 'r+')
+            try {
+              if (!same(current, fs.fstatSync(descriptor, { bigint: true }))) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+              const bytes = Buffer.from(`${JSON.stringify(journal.document)}\n`)
+              fs.writeFileSync(descriptor, bytes)
+              fs.ftruncateSync(descriptor, bytes.length)
+              fs.fsyncSync(descriptor)
+            } finally { fs.closeSync(descriptor) }
+          } else unlinkIdentity(target, current)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+        }
+        unlinkIdentity(entry, record.identity)
+      } else if (child.isDirectory() && (directory !== targetRoot || name === CANONICAL_PROJECT_DIRECTORY)) {
+        visit(entry)
+      }
+    }
+  }
+  visit(targetRoot)
 }
 
 function exactOwned(owned: OwnedPath): fs.BigIntStats {
@@ -409,7 +516,10 @@ function createInstallJournal(
 
 function releaseInstallJournal(journal: ReadInstallJournal, targetRoot: string, removeMarker: boolean): void {
   const marker = path.join(targetRoot, INSTALL_MARKER_NAME)
-  if (removeMarker) unlinkIdentity(marker, journal.identity)
+  if (removeMarker) {
+    reservationOwned(journal, targetRoot)
+    unlinkIdentity(marker, readPhysicalFile(marker).identity)
+  }
   unlinkIdentity(journal.path, journal.identity)
   activeInstallJournals.delete(normalized(journal.path))
 }
@@ -419,36 +529,39 @@ function reservationOwned(journal: ReadInstallJournal, targetRoot: string): fs.B
   if (!root.isDirectory() || root.isSymbolicLink()
     || normalized(fs.realpathSync.native(targetRoot)) !== normalized(targetRoot)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
   const marker = readPhysicalFile(path.join(targetRoot, INSTALL_MARKER_NAME))
-  if (!same(marker.identity, journal.identity)
-    || !sameJournal(parseInstallJournal(marker.bytes, targetRoot), journal.document)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+  // Copied markers have a different inode; the complete journal and random reservation token establish ownership.
+  if (!sameJournal(parseInstallJournal(marker.bytes, targetRoot), journal.document)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
   return root
 }
 
-function cleanupInstallTemporaries(journal: ReadInstallJournal, targetRoot: string): void {
+async function cleanupInstallTemporaries(journal: ReadInstallJournal, targetRoot: string): Promise<void> {
   const storage = path.join(targetRoot, CANONICAL_PROJECT_DIRECTORY)
   if (!fs.existsSync(storage)) return
   physicalDirectory(storage)
   const suffix = `.portable-restore-${journal.document.reservationToken}.tmp`
-  const visit = (directory: string) => {
+  const visit = async (directory: string): Promise<void> => {
     for (const name of fs.readdirSync(directory)) {
       const entry = path.join(directory, name)
       const info = fs.lstatSync(entry, { bigint: true })
       if (info.isSymbolicLink() || normalized(fs.realpathSync.native(entry)) !== normalized(entry)) {
         fail('PORTABLE_RESTORE_UNSAFE_TARGET')
       }
-      if (info.isDirectory()) { visit(entry); continue }
+      if (info.isDirectory()) { await visit(entry); continue }
       if (!info.isFile() || !name.startsWith('.') || !name.endsWith(suffix)) continue
       const finalName = name.slice(1, -suffix.length)
       if (!finalName) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
       const finalPath = path.join(directory, finalName)
       if (fs.existsSync(finalPath)) {
         const final = fs.lstatSync(finalPath, { bigint: true })
-        if (!final.isFile() || final.isSymbolicLink() || !same(info, final)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+        if (!final.isFile() || final.isSymbolicLink()
+          || !same(info, final) && await hashPhysicalFile(entry) !== await hashPhysicalFile(finalPath)) {
+          fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+        }
       }
       fs.unlinkSync(entry)
     }
   }
-  visit(storage)
+  await visit(storage)
 }
 
 function assertFreeze(value: unknown, originProjectId: string, snapshotGeneration: string): void {
@@ -632,7 +745,8 @@ async function installStagedProject(
     const target = path.join(targetStorage, path.relative(storage, source.path))
     if (fs.existsSync(target)) {
       const targetInfo = fs.lstatSync(target, { bigint: true })
-      if (!targetInfo.isFile() || targetInfo.isSymbolicLink() || !same(temporaryInfo, targetInfo)) {
+      if (!targetInfo.isFile() || targetInfo.isSymbolicLink()
+        || !same(temporaryInfo, targetInfo) && await hashPhysicalFile(temporary) !== await hashPhysicalFile(target)) {
         fail('PORTABLE_RESTORE_UNSAFE_TARGET')
       }
     }
@@ -663,13 +777,16 @@ async function installStagedProject(
       const descriptor = fs.openSync(temporary, 'r+')
       try { fs.fsyncSync(descriptor) } finally { fs.closeSync(descriptor) }
       if (await hashPhysicalFile(temporary) !== await hashPhysicalFile(source.path)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
-      try { fs.linkSync(temporary, target) } catch (error) {
+      try { publishFileExclusive(temporary, target, journal.document.reservationToken) } catch (error) {
         if ((error as NodeJS.ErrnoException).code === 'EEXIST') fail('PORTABLE_RESTORE_UNSAFE_TARGET')
         throw error
       }
       const temporaryInfo = fs.lstatSync(temporary, { bigint: true })
       const linked = fs.lstatSync(target, { bigint: true })
-      if (!linked.isFile() || linked.isSymbolicLink() || !same(temporaryInfo, linked)) fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+      if (!linked.isFile() || linked.isSymbolicLink()
+        || !same(temporaryInfo, linked) && await hashPhysicalFile(target) !== await hashPhysicalFile(temporary)) {
+        fail('PORTABLE_RESTORE_UNSAFE_TARGET')
+      }
       fs.unlinkSync(temporary)
     }
     removeOwnedFile(attempt, source.path)
@@ -717,7 +834,8 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
   }
   physicalDirectory(targetParent)
   const archiveSha256 = await hashPhysicalFile(input.archivePath)
-  const extracted = await extractPortableProjectArchive({ archivePath: input.archivePath, stagingParentPath: targetParent })
+  // SQLite and knowledge reconstruction require a local filesystem, even when publishing to a virtual drive.
+  const extracted = await extractPortableProjectArchive({ archivePath: input.archivePath, stagingParentPath: os.tmpdir() })
   if (await hashPhysicalFile(input.archivePath) !== archiveSha256) fail('PORTABLE_RESTORE_INVALID')
   let attempt: OwnedAttempt | undefined
   let heldJournalPath: string | undefined
@@ -802,8 +920,9 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
     }
     if (targetExists) {
       if (journal) {
+        recoverCopiedPublications(journal, targetRoot)
         reservationOwned(journal, targetRoot)
-        cleanupInstallTemporaries(journal, targetRoot)
+        await cleanupInstallTemporaries(journal, targetRoot)
       }
       const installed = await installedReceipt(targetRoot, authority, extracted.manifest.entries)
       if (installed) {
@@ -885,7 +1004,7 @@ export async function restorePortableProject(input: RestorePortableProjectInput)
         }
         throw error
       }
-      try { fs.linkSync(journal.path, path.join(targetRoot, INSTALL_MARKER_NAME)) } catch {
+      try { publishFileExclusive(journal.path, path.join(targetRoot, INSTALL_MARKER_NAME), journal.document.reservationToken) } catch {
         fail('PORTABLE_RESTORE_UNSAFE_TARGET')
       }
       reservationOwned(journal, targetRoot)

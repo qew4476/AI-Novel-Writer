@@ -176,7 +176,7 @@ export function characterAssetSnapshot(storageRoot: string): ProjectAssetSourceS
   })
 }
 export const CANONICAL_RAW_PROJECT_ASSETS = Object.freeze([
-  'prompts', 'skills', 'writing-skills.json', 'partial_arch', 'partial_arch.json', 'chapter_creation_log.json',
+  'prompts', 'skills', 'writing-skills.json', 'partial_arch', 'partial_arch.json', 'chapter_creation_log.json', 'backups',
 ] as const)
 const ASSETS = CANONICAL_RAW_PROJECT_ASSETS
 const MIGRATED_ASSETS = ['avatars'] as const

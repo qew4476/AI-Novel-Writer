@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { hasSupportedProjectLinkCount } from './project-file-links';
 import { createHash } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import type Database from 'better-sqlite3';
@@ -142,7 +143,7 @@ function readFile(root: string, relative: string, optional = false): Buffer | nu
                 return null;
             throw error;
         }
-        if (stat.isSymbolicLink() || cursor !== absolute && !stat.isDirectory() || cursor === absolute && (!stat.isFile() || stat.nlink !== 1))
+        if (stat.isSymbolicLink() || cursor !== absolute && !stat.isDirectory() || cursor === absolute && (!stat.isFile() || !hasSupportedProjectLinkCount(stat.nlink)))
             fail('GENERATION_ASSET_UNSAFE');
     }
     return fs.readFileSync(absolute);

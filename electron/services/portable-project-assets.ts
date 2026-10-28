@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import { createHash } from 'node:crypto'
 
 import { CANONICAL_PROJECT_DIRECTORY } from '../../src/shared/project-format'
@@ -43,7 +44,7 @@ function physicalDirectory(directory: string, root: string): void {
 
 function physicalFile(file: string, root: string): fs.BigIntStats {
   const info = fs.lstatSync(file, { bigint: true })
-  if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1n
+  if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)
     || !contained(root, file) || !contained(fs.realpathSync.native(root), fs.realpathSync.native(file))) fail()
   return info
 }
@@ -85,7 +86,7 @@ function enumerateRawFiles(storageRoot: string): PortableProvidedFile[] {
     const entry = path.join(storageRoot, name)
     if (fs.existsSync(entry)) {
       const info = fs.lstatSync(entry)
-      const directoryExpected = name === 'prompts' || name === 'skills' || name === 'partial_arch'
+      const directoryExpected = name === 'prompts' || name === 'skills' || name === 'partial_arch' || name === 'backups'
       if (info.isSymbolicLink() || directoryExpected !== info.isDirectory()) fail()
       visit(name, entry)
     }

@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { hasSupportedProjectLinkCount } from './project-file-links'
 
 import type Database from 'better-sqlite3'
 
@@ -40,8 +41,8 @@ function readRegular(file: string, afterOpen?: (file: string) => void): Buffer {
     const opened = fs.fstatSync(descriptor, { bigint: true })
     afterOpen?.(file)
     const current = fs.lstatSync(file, { bigint: true })
-    if (!opened.isFile() || opened.nlink !== 1n || opened.size > BigInt(MAX_BYTES)
-      || !current.isFile() || current.isSymbolicLink() || current.nlink !== 1n || !sameFile(opened, current)
+    if (!opened.isFile() || !hasSupportedProjectLinkCount(opened.nlink) || opened.size > BigInt(MAX_BYTES)
+      || !current.isFile() || current.isSymbolicLink() || !hasSupportedProjectLinkCount(current.nlink) || !sameFile(opened, current)
       || normalized(fs.realpathSync.native(file)) !== normalized(file)) invalid()
     const bytes = fs.readFileSync(descriptor)
     const final = fs.lstatSync(file, { bigint: true })

@@ -98,6 +98,21 @@ describe('production portable project assets', () => {
       .rejects.toThrow('PORTABLE_KNOWLEDGE_INVALID')
   })
 
+  it('rejects a backup file or a backup directory junction', async () => {
+    const f = fixture()
+    const backups = path.join(f.storage, 'backups')
+    fs.writeFileSync(backups, 'not a directory')
+    const snapshot = () => createPortableProjectAssetProvider().snapshot({ sourceProjectRoot: f.root,
+      sourceDatabasePath: '', projectSession: { projectId: 'p', projectPath: f.root, leaseId: 'l' },
+      snapshotGeneration: 'g' })
+    await expect(snapshot()).rejects.toThrow('PORTABLE_ASSET_UNSAFE')
+    fs.unlinkSync(backups)
+    const outside = path.join(f.root, 'outside')
+    fs.mkdirSync(outside)
+    fs.symlinkSync(outside, backups, 'junction')
+    await expect(snapshot()).rejects.toThrow('PORTABLE_ASSET_UNSAFE')
+  })
+
   it('fails closed on unknown top-level entries, hardlinks and NFKC collisions', async () => {
     const unknown = fixture()
     fs.writeFileSync(path.join(unknown.storage, 'unknown.txt'), 'x')

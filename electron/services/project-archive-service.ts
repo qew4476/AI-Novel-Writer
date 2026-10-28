@@ -1,5 +1,7 @@
 import fs, { createReadStream } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
 
@@ -242,7 +244,7 @@ function regularFile(file: string, missingCode: ProjectArchiveServiceErrorCode):
   try {
     const absolute = path.resolve(file)
     const info = fs.lstatSync(absolute)
-    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1
+    if (!info.isFile() || info.isSymbolicLink() || !hasSupportedProjectLinkCount(info.nlink)
       || normalizedPath(fs.realpathSync.native(absolute)) !== normalizedPath(absolute)) fail('PORTABLE_ASSET_UNSAFE')
     return info
   } catch (error) {
@@ -935,26 +937,53 @@ async function hashFile(file: string): Promise<string> {
   return digest.digest('hex')
 }
 
-function publishStagedArchive(stagedArchivePath: string, targetPath: string): fs.BigIntStats {
+async function publishStagedArchive(stagedArchivePath: string, targetPath: string): Promise<fs.BigIntStats> {
   const staged = fs.lstatSync(stagedArchivePath, { bigint: true })
   if (!staged.isFile() || staged.isSymbolicLink()
     || normalizedPath(fs.realpathSync.native(stagedArchivePath)) !== normalizedPath(stagedArchivePath)) {
     fail('PORTABLE_ASSET_UNSAFE')
   }
   safeDirectory(path.dirname(targetPath))
+  let owned = staged
   try { fs.linkSync(stagedArchivePath, targetPath) }
   catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') {
       throw new PortableProjectArchiveError('PORTABLE_ARCHIVE_TARGET_EXISTS')
     }
-    throw new PortableProjectArchiveError('PORTABLE_ARCHIVE_PUBLISH_UNSUPPORTED')
+    if (!['ENOSYS', 'ENOTSUP', 'EOPNOTSUPP', 'EPERM', 'EACCES', 'EISDIR', 'EXDEV'].includes(code ?? '')) {
+      throw new PortableProjectArchiveError('PORTABLE_ARCHIVE_PUBLISH_UNSUPPORTED')
+    }
+    let descriptor: number
+    try { descriptor = fs.openSync(targetPath, 'wx', 0o600) } catch (copyError) {
+      if ((copyError as NodeJS.ErrnoException).code === 'EEXIST') {
+        throw new PortableProjectArchiveError('PORTABLE_ARCHIVE_TARGET_EXISTS')
+      }
+      throw copyError
+    }
+    owned = fs.fstatSync(descriptor, { bigint: true })
+    try {
+      for await (const chunk of createReadStream(stagedArchivePath)) fs.writeFileSync(descriptor, chunk)
+      fs.fsyncSync(descriptor)
+    } catch (copyError) {
+      fs.closeSync(descriptor)
+      try {
+        const current = fs.lstatSync(targetPath, { bigint: true })
+        if (current.isFile() && !current.isSymbolicLink() && sameObject(owned, current)
+          && normalizedPath(fs.realpathSync.native(targetPath)) === normalizedPath(targetPath)) fs.unlinkSync(targetPath)
+      } catch { /* Preserve an unknown replacement. */ }
+      throw copyError
+    }
+    fs.closeSync(descriptor)
   }
   const published = fs.lstatSync(targetPath, { bigint: true })
-  if (!published.isFile() || published.isSymbolicLink() || !sameObject(staged, published)
-    || normalizedPath(fs.realpathSync.native(targetPath)) !== normalizedPath(targetPath)) {
+  if (!published.isFile() || published.isSymbolicLink() || !sameObject(owned, published)
+    || published.size !== staged.size
+    || normalizedPath(fs.realpathSync.native(targetPath)) !== normalizedPath(targetPath)
+    || await hashFile(targetPath) !== await hashFile(stagedArchivePath)) {
     try {
       const current = fs.lstatSync(targetPath, { bigint: true })
-      if (current.isFile() && !current.isSymbolicLink() && sameObject(staged, current)
+      if (current.isFile() && !current.isSymbolicLink() && sameObject(owned, current)
         && normalizedPath(fs.realpathSync.native(targetPath)) === normalizedPath(targetPath)) fs.unlinkSync(targetPath)
     } catch { /* Preserve an unknown replacement. */ }
     throw new PortableProjectArchiveError('PORTABLE_ARCHIVE_INVALID')
@@ -1006,7 +1035,8 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
   if (canonicalManifest.projectId !== frozenContext.projectId) fail('PORTABLE_CONTEXT_INVALID')
   const snapshotGeneration = input.snapshotGeneration ?? randomUUID()
   const createdAt = (input.now?.() ?? new Date()).toISOString()
-  const attempt = prepareAttempt(attemptParent)
+  // Keep SQLite snapshots and ZIP construction on a local filesystem before publishing to virtual drives.
+  const attempt = prepareAttempt(os.tmpdir())
   const attemptRoot = attempt.root
   try {
     const sourceSnapshotPath = path.join(attemptRoot, 'source.db')
@@ -1195,7 +1225,7 @@ export async function exportPortableProject(input: ExportPortableProjectInput): 
         fail('PORTABLE_SOURCE_CHANGED')
       }
     }
-    const targetInfo = publishStagedArchive(stagedArchivePath, targetPath)
+    const targetInfo = await publishStagedArchive(stagedArchivePath, targetPath)
     return {
       originProjectId: canonicalManifest.projectId,
       snapshotGeneration,

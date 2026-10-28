@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { createHash } from 'node:crypto';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { initializeLegacyBaselineSchema } from '../../migrations/baseline-schema';
 import { CURRENT_DESKTOP_SCHEMA_VERSION, getDesktopMigrationRegistry } from '../../migrations/desktop-registry';
 import { migrateSchema } from '../../migrations/runner';
@@ -457,6 +457,22 @@ describe('main rebuilt generation sources', () => {
     } if (kind === 'hash')
         f.db.exec("UPDATE contents SET body='mutated finalized' WHERE id=3"); if (kind === 'receipt')
         f.db.exec('DELETE FROM finalization_outbox'); expect(() => f.build()).toThrow(); });
+    it('handles unavailable prompt link counts on Windows virtual drives', () => {
+        const f = fixture();
+        put(f.deps.projectStorageRoot, 'prompts/draft.json', '{"key":"draft"}');
+        const expected = f.build();
+        const lstat = fs.lstatSync;
+        const spy = vi.spyOn(fs, 'lstatSync').mockImplementation(((...args: Parameters<typeof fs.lstatSync>) => {
+            const stat = lstat(...args);
+            if (path.resolve(String(args[0])) === path.join(f.deps.projectStorageRoot, 'prompts/draft.json'))
+                Object.defineProperty(stat, 'nlink', { value: 0 });
+            return stat;
+        }) as typeof fs.lstatSync);
+        try {
+            if (process.platform === 'win32') expect(f.build()).toEqual(expected);
+            else expect(() => f.build()).toThrow('GENERATION_ASSET_UNSAFE');
+        } finally { spy.mockRestore(); }
+    });
     it('rejects a linked prompt without traversing an external source', () => { const f = fixture(); put(f.root, 'outside.json', '{"key":"draft"}'); fs.mkdirSync(path.join(f.deps.projectStorageRoot, 'prompts')); fs.linkSync(path.join(f.root, 'outside.json'), path.join(f.deps.projectStorageRoot, 'prompts/draft.json')); expect(() => f.build()).toThrow('GENERATION_ASSET_UNSAFE'); });
     it('excludes lease lifetime fields and rejects secret or absolute path metadata', () => { const f = fixture(), a = f.build(); const extra = { ...f.input.modelReceipt, leaseId: 'lease-secret', createdAt: 123, expiresAt: 456 }; f.input.modelReceipt = extra; expect(f.build().binding.fingerprint.modelLeaseRevision).toBe(a.binding.fingerprint.modelLeaseRevision); expect(JSON.stringify(f.build().binding.sourceManifest)).not.toContain('lease-secret'); f.input.policy = { apiKey: 'never persist' }; expect(() => f.build()).toThrow('GENERATION_METADATA_PRIVATE_FIELD'); f.input.policy = { source: 'C:\\private\\config' }; expect(() => f.build()).toThrow('GENERATION_METADATA_PRIVATE_PATH'); });
 });

@@ -8,6 +8,7 @@ import { assertKnowledgeSourceIdle, withKnowledgeSourceGate } from './services/k
 import * as lancedb from '@lancedb/lancedb'
 import { Field, FixedSizeList as ArrowFixedSizeList, Float32, Int32, Utf8, Schema as ArrowSchema } from 'apache-arrow'
 import fs from 'node:fs'
+import { hasSupportedProjectLinkCount } from './services/project-file-links'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { getProjectDataRoot } from './services/project-data-locator'
@@ -145,7 +146,7 @@ export function readKnowledgeCopy(projectStorageRoot: string, docId: string): Kn
   const file = knowledgeCopyPath(projectStorageRoot, docId)
   if (!fs.existsSync(file)) return null
   const stat = fs.lstatSync(file)
-  if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
+  if (!stat.isFile() || stat.isSymbolicLink() || !hasSupportedProjectLinkCount(stat.nlink)) throw new Error('KNOWLEDGE_COPY_UNSAFE_PATH')
   const value = JSON.parse(fs.readFileSync(file, 'utf8')) as Partial<KnowledgeCopy>
   if (typeof value.content !== 'string' || typeof value.indexedHash !== 'string' || typeof value.edited !== 'boolean' || typeof value.indexDirty !== 'boolean') {
     throw new Error('KNOWLEDGE_COPY_INVALID')
@@ -1624,7 +1625,7 @@ async function readPortableKnowledgeSnapshotInternal(projectStorageRoot: string)
     }
     if (info.isDirectory()) {
       for (const name of fs.readdirSync(entry)) assertPhysicalTree(path.join(entry, name))
-    } else if (!info.isFile() || info.nlink !== 1n) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
+    } else if (!info.isFile() || !hasSupportedProjectLinkCount(info.nlink)) throw new Error('PORTABLE_KNOWLEDGE_INVALID')
   }
   const storageInfo = fs.lstatSync(projectStorageRoot)
   if (!storageInfo.isDirectory() || storageInfo.isSymbolicLink()

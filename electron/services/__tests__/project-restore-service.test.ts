@@ -616,6 +616,146 @@ describe('portable project restore service', { timeout: 20_000 }, () => {
     } finally { rename.mockRestore() }
   })
 
+  it.each(['ENOTSUP', 'EISDIR'])('restores and resumes without hardlinks (%s)', async code => {
+    const f = await exportedFixture()
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation(() => { throw Object.assign(new Error(code), { code }) })
+    try {
+      await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot,
+        __testHooks: { afterTargetReserved: () => { throw new Error('interrupted') } },
+      })).rejects.toThrow('interrupted')
+      expect(fs.existsSync(path.join(f.targetRoot, '.ai-novel', 'project.json'))).toBe(false)
+      const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+      expect(await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })).toEqual(receipt)
+      expect(fs.existsSync(restoreJournalPath(f.targetRoot))).toBe(false)
+    } finally { link.mockRestore() }
+  })
+
+  it.each(['project.db', 'project.json', '.portable-restore-reservation.json'])(
+    'resumes after copying %s is interrupted, preserving replacements', async name => {
+      const f = await exportedFixture()
+      const originalWrite = fs.writeFileSync
+      let copying: string | undefined
+      let interrupted = false
+      const link = vi.spyOn(fs, 'linkSync').mockImplementation((_source, target) => {
+        if (path.basename(target.toString()) === name) copying = target.toString()
+        throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+      })
+      const write = vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        if (copying && !interrupted && typeof file === 'number') {
+          interrupted = true
+          originalWrite(file, Buffer.from(data as Uint8Array).subarray(0, 7))
+          throw new Error('copy-interrupted')
+        }
+        return originalWrite(file, data, options)
+      })
+      try {
+        await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })).rejects.toThrow()
+        expect(interrupted).toBe(true)
+        expect(fs.statSync(copying!).size).toBe(7)
+        // A replacement must never be deleted using the interrupted copy's receipt.
+        fs.renameSync(copying!, `${copying!}.saved`)
+        fs.writeFileSync(copying!, 'keep replacement')
+        await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot }))
+          .rejects.toThrow('PORTABLE_RESTORE_UNSAFE_TARGET')
+        expect(fs.readFileSync(copying!, 'utf8')).toBe('keep replacement')
+        fs.unlinkSync(copying!)
+        fs.renameSync(`${copying!}.saved`, copying!)
+        if (name === '.portable-restore-reservation.json') {
+          write.mockImplementation((file, data, options) => {
+            if (typeof file === 'number' && fs.fstatSync(file).ino === fs.lstatSync(copying!).ino) {
+              originalWrite(file, Buffer.from(data as Uint8Array).subarray(0, 7))
+              throw new Error('recovery-interrupted')
+            }
+            return originalWrite(file, data, options)
+          })
+          await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot }))
+            .rejects.toThrow('recovery-interrupted')
+          write.mockImplementation(originalWrite)
+        }
+        const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+        expect(await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })).toEqual(receipt)
+        expect(fs.existsSync(restoreJournalPath(f.targetRoot))).toBe(false)
+        expect(fs.readdirSync(f.targetRoot)).toEqual(['.ai-novel'])
+        expect(fs.readdirSync(path.join(f.targetRoot, '.ai-novel')).some(entry => entry.includes('.copy-'))).toBe(false)
+      } finally { write.mockRestore(); link.mockRestore() }
+    },
+  )
+
+  it.each(['project.db', 'project.json', '.portable-restore-reservation.json'])(
+    'recovers an unrecorded %s publication and preserves uncertain replacements', async name => {
+      const f = await exportedFixture()
+      const originalOpen = fs.openSync
+      let copying: string | undefined
+      let interrupted = false
+      const link = vi.spyOn(fs, 'linkSync').mockImplementation((_source, target) => {
+        if (path.basename(target.toString()) === name) copying = target.toString()
+        throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+      })
+      const open = vi.spyOn(fs, 'openSync').mockImplementation((file, flags, mode) => {
+        if (!interrupted && copying && file.toString() === copying && flags === 'wx') {
+          expect(fs.readdirSync(path.dirname(copying)).some(entry => entry.startsWith(`.${name}.portable-restore-`)
+            && entry.endsWith('.pending'))).toBe(true)
+        }
+        const descriptor = originalOpen(file, flags, mode)
+        if (!interrupted && copying && file.toString() === copying && flags === 'wx') {
+          interrupted = true
+          fs.closeSync(descriptor)
+          // Model process termination after creation: the caller never receives the descriptor.
+          throw new Error('stopped-after-create')
+        }
+        return descriptor
+      })
+      try {
+        await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })).rejects.toThrow()
+        expect(interrupted).toBe(true)
+        // A real process stop skips the open-error cleanup; reconstruct its durable intent.
+        const journal = JSON.parse(fs.readFileSync(restoreJournalPath(f.targetRoot), 'utf8')) as { reservationToken: string }
+        fs.writeFileSync(path.join(path.dirname(copying!), `.${name}.portable-restore-${journal.reservationToken}.pending`), '')
+        fs.writeFileSync(copying!, 'keep uncertain replacement')
+        const receipt = await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+        expect(await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })).toEqual(receipt)
+        const recovered = fs.readdirSync(path.dirname(f.targetRoot)).filter(entry => entry.startsWith('.portable-restore-recovered-'))
+        expect(recovered).toHaveLength(1)
+        expect(fs.readFileSync(path.join(path.dirname(f.targetRoot), recovered[0]), 'utf8')).toBe('keep uncertain replacement')
+      } finally { open.mockRestore(); link.mockRestore() }
+    },
+  )
+
+  it('does not overwrite a file that wins the exclusive-copy fallback race', async () => {
+    const f = await exportedFixture()
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation((_source, target) => {
+      if (path.basename(target.toString()) === 'project.db') fs.writeFileSync(target, 'keep competing file')
+      throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+    })
+    try {
+      await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot }))
+        .rejects.toThrow('PORTABLE_RESTORE_UNSAFE_TARGET')
+      expect(fs.readFileSync(path.join(f.targetRoot, '.ai-novel', 'project.db'), 'utf8')).toBe('keep competing file')
+      expect(fs.existsSync(path.join(f.targetRoot, '.ai-novel', 'project.json'))).toBe(false)
+    } finally { link.mockRestore() }
+  })
+
+  it('cleans copied publication temporaries after a lost commit response', async () => {
+    const f = await exportedFixture()
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+    })
+    try {
+      await expect(restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot,
+        __testHooks: { afterInstallCommitted: target => {
+          const journal = JSON.parse(fs.readFileSync(restoreJournalPath(target), 'utf8')) as { reservationToken: string }
+          const storage = path.join(target, '.ai-novel')
+          fs.copyFileSync(path.join(storage, 'project.json'), path.join(storage,
+            `.project.json.portable-restore-${journal.reservationToken}.tmp`))
+          throw new Error('response-lost')
+        } },
+      })).rejects.toThrow('response-lost')
+      await restorePortableProject({ archivePath: f.archive, targetProjectRoot: f.targetRoot })
+      expect(fs.readdirSync(path.join(f.targetRoot, '.ai-novel')).some(name => name.endsWith('.tmp'))).toBe(false)
+      expect(fs.existsSync(restoreJournalPath(f.targetRoot))).toBe(false)
+    } finally { link.mockRestore() }
+  })
+
   it('resumes the same archive from an owned partial reservation without exposing a valid project early', async () => {
     const f = await exportedFixture()
     let staging = ''

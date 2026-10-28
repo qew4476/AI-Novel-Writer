@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { hasSupportedProjectLinkCount } from './project-file-links'
 import path from 'node:path'
 
 import { CANONICAL_PROJECT_DIRECTORY } from '../../src/shared/project-format'
@@ -77,8 +78,8 @@ function regularFile(file: string, maxBytes: number, afterOpen?: (file: string) 
     const opened = fs.fstatSync(descriptor, { bigint: true })
     afterOpen?.(file)
     const current = fs.lstatSync(file, { bigint: true })
-    if (!opened.isFile() || opened.nlink !== 1n || opened.size > BigInt(maxBytes)
-      || !current.isFile() || current.isSymbolicLink() || current.nlink !== 1n || !sameFile(opened, current)
+    if (!opened.isFile() || !hasSupportedProjectLinkCount(opened.nlink) || opened.size > BigInt(maxBytes)
+      || !current.isFile() || current.isSymbolicLink() || !hasSupportedProjectLinkCount(current.nlink) || !sameFile(opened, current)
       || normalized(fs.realpathSync.native(file)) !== normalized(file)) fail('PORTABLE_RUNTIME_FREEZE_INVALID')
     const bytes = fs.readFileSync(descriptor)
     const final = fs.lstatSync(file, { bigint: true })

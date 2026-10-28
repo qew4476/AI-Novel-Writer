@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createHash, randomUUID } from 'node:crypto'
 import { createRequire } from 'node:module'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { closeProjectDatabase, createProjectDatabase, initProjectDatabase } from '../../database'
 import { BlueprintRepository } from '../../repositories/blueprint-repository'
@@ -18,6 +18,7 @@ import type { ReviewCycleRecheckContext } from '../../../src/shared/review-cycle
 import type { GenerationTransportDiagnostics } from '../../../src/shared/generation-contract'
 import { extractPortableProjectArchive } from '../portable-project-archive'
 import { restorePortableProject } from '../project-restore-service'
+import { createPortableProjectAssetProvider } from '../portable-project-assets'
 import { readPortableRuntimeFreeze } from '../portable-runtime-freeze'
 import { ReviewRevisionGeneration } from '../review-revision-generation'
 import { GenerationRunRepository } from '../../repositories/generation-run-repository'
@@ -389,6 +390,26 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     const source = new Database(f.databasePath, { readonly: true })
     try { expect(source.prepare('SELECT COUNT(*) FROM generation_artifacts').pluck().get()).toBe(2) }
     finally { source.close() }
+  })
+
+  it('roundtrips draft and finalized chapter backup bytes with the production asset provider', async () => {
+    const f = fixture()
+    const backups = [
+      ['backups/chapter-1/draft.md', Buffer.from('草稿歷史\n第一版', 'utf8')],
+      ['backups/chapter-1/final.md', Buffer.from('定稿歷史\r\n完成版', 'utf8')],
+    ] as const
+    for (const [relative, bytes] of backups) {
+      const file = path.join(f.storage, relative)
+      fs.mkdirSync(path.dirname(file), { recursive: true })
+      fs.writeFileSync(file, bytes)
+    }
+    await exportPortableProject(input(f, createPortableProjectAssetProvider()))
+    const targetRoot = path.join(f.base, 'restored-backups')
+    await restorePortableProject({ archivePath: f.target, targetProjectRoot: targetRoot })
+    for (const [relative, bytes] of backups) {
+      expect(fs.readFileSync(path.join(targetRoot, '.ai-novel', relative))).toEqual(bytes)
+      expect(fs.readFileSync(path.join(f.storage, relative))).toEqual(bytes)
+    }
   })
 
   it.each(['character-delete', 'runtime-replace', 'runtime-remove'])('exports %s avatar provenance with its retained asset', async provenance => {
@@ -876,6 +897,59 @@ describe('portable project export service', { timeout: 20_000 }, () => {
     }))).rejects.toThrow(/PORTABLE_(ASSET_MISSING|SOURCE_CHANGED)/u)
     expect(fs.readFileSync(path.join(replacementRoot, 'keep.txt'), 'utf8')).toBe('replacement')
     expect(fs.existsSync(f.target)).toBe(false)
+  })
+
+  it.each(['ENOTSUP', 'EISDIR', 'EXDEV'])('exports with exclusive copying when publication links fail (%s)', async code => {
+    const f = fixture()
+    const originalLink = fs.linkSync
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
+      if (target.toString() === f.target) throw Object.assign(new Error(code), { code })
+      return originalLink(source, target)
+    })
+    try {
+      const receipt = await exportPortableProject(input(f))
+      expect(hash(fs.readFileSync(f.target))).toBe(receipt.targetSha256)
+      expect(fs.statSync(f.target).size).toBe(receipt.targetByteSize)
+      await restorePortableProject({ archivePath: f.target, targetProjectRoot: path.join(f.base, 'restored-copy') })
+    } finally { link.mockRestore() }
+  })
+
+  it('preserves an existing target that wins the copy-publication race', async () => {
+    const f = fixture()
+    const originalLink = fs.linkSync
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
+      if (target.toString() === f.target) {
+        fs.writeFileSync(f.target, 'keep competing archive')
+        throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+      }
+      return originalLink(source, target)
+    })
+    try {
+      await expect(exportPortableProject(input(f))).rejects.toThrow('PORTABLE_ARCHIVE_TARGET_EXISTS')
+      expect(fs.readFileSync(f.target, 'utf8')).toBe('keep competing archive')
+    } finally { link.mockRestore() }
+  })
+
+  it('removes only its own partial archive when copying fails', async () => {
+    const f = fixture()
+    const originalLink = fs.linkSync
+    const originalWrite = fs.writeFileSync
+    let copying = false
+    const link = vi.spyOn(fs, 'linkSync').mockImplementation((source, target) => {
+      if (target.toString() === f.target) {
+        copying = true
+        throw Object.assign(new Error('unsupported'), { code: 'ENOTSUP' })
+      }
+      return originalLink(source, target)
+    })
+    const write = vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+      if (copying && typeof file === 'number') throw Object.assign(new Error('copy-failed'), { code: 'ENOSPC' })
+      return originalWrite(file, data, options)
+    })
+    try {
+      await expect(exportPortableProject(input(f))).rejects.toThrow('copy-failed')
+      expect(fs.existsSync(f.target)).toBe(false)
+    } finally { write.mockRestore(); link.mockRestore() }
   })
 
   it('does not overwrite an existing target and never places attempts inside the source project', async () => {
