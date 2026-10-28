@@ -922,9 +922,6 @@ export function registerDatabaseController() {
       assertRequiredExpectedProjectPath(getCurrentProjectPath(), expectedProjectPath)
       const draft = DraftRepository.getMeta(id)
       if (!draft) throw new Error('DRAFT_NOT_FOUND')
-      if (draft.status === 'finalized') {
-        throw new Error('DRAFT_FINALIZED_READ_ONLY')
-      }
       const saved = DraftRepository.updateContent(id, content, wordCount, createVersion)
       return { success: true, ...saved }
     } catch (err) {

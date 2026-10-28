@@ -1,4 +1,5 @@
 import type BetterSqlite3 from 'better-sqlite3'
+import { isReceiptedDraftStatus } from '../../src/shared/draft-status'
 import { countDraftUnits } from '../../src/shared/draft-units'
 
 /** Create an independent version without changing the saved source, in the caller's transaction. */
@@ -7,7 +8,7 @@ export function createDraftVersion(db: BetterSqlite3.Database, sourceId: number,
     SELECT chapter_number, status, source_dependencies FROM drafts WHERE id = ?
   `).get(sourceId) as { chapter_number: number; status: string; source_dependencies: string } | undefined
   if (!source) throw new Error('DRAFT_NOT_FOUND')
-  if (source.status === 'finalized' || source.status === 'archived') throw new Error('DRAFT_FINALIZED_READ_ONLY')
+  if (isReceiptedDraftStatus(source.status) || source.status === 'archived') throw new Error('DRAFT_FINALIZED_READ_ONLY')
   const { version } = db.prepare(`
     SELECT COALESCE(MAX(version), 0) + 1 AS version FROM drafts WHERE chapter_number = ?
   `).get(source.chapter_number) as { version: number }

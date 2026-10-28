@@ -12,6 +12,7 @@ import {
   type DraftStatus,
   type FrozenDraftSourceIdentity,
 } from '../../services/workflows/chapter-workflow'
+import { DRAFT_STATUS_INFO } from '../../shared/draft-status'
 import { getPendingRevisions, getReviewsForVersion, type ReviewEntry, type RevisionEntry } from '../../services/draft-index'
 import { isRevisionSourceCurrent, refreshChapterFacts } from '../../stores/navigation/chapter-facts'
 import { readDraftBody, useDraftStore } from '../../stores/draft-store'
@@ -130,7 +131,7 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
   }), [reload])
 
   const status: DraftStatus = tabDraftStatus ?? meta?.status ?? 'draft'
-  const isReadonly = status === 'finalized' || status === 'archived' || !resourceWriteAllowed(filePath)
+  const isReadonly = DRAFT_STATUS_INFO[status].readOnly || !resourceWriteAllowed(filePath)
 
   const activeRuns = useWorkflowStore(s => s.activeRuns)
   // 按运行占用的章节资源判断归属；标题随界面语言变化，英文界面里没有「第N章」。
@@ -160,10 +161,8 @@ export function useDraftActions({ tabId, filePath, content, projectKey }: DraftT
     )
     if (
       !targetTab
-      || targetTab.draftStatus === 'finalized'
-      || targetTab.draftStatus === 'archived'
-      || status === 'finalized'
-      || status === 'archived'
+      || (targetTab.draftStatus && DRAFT_STATUS_INFO[targetTab.draftStatus].readOnly)
+      || DRAFT_STATUS_INFO[status].readOnly
     ) return
     const saveSnapshot = {
       content: targetTab.content ?? draftContent,

@@ -95,6 +95,18 @@ describe('saved draft version history', () => {
     ])
   })
 
+  it('supersedes the old independent final version when a saved draft is finalized again', () => {
+    const first = finalize()
+    const second = FinalizationRepository.commit({ createVersion: true, finalizationId: 'final-2', draftId, chapterNumber: 1,
+      chapterTitle: 'chapter', content: original, contentHash: createHash('sha256').update(original).digest('hex'),
+      contentRevision: 3, targetFileName: 'chapter1.txt' })
+    expect(DraftRepository.getMeta(first.draftId)?.status).toBe('superseded')
+    expect(DraftRepository.getMeta(second.draftId)?.status).toBe('finalized')
+    expect(DraftRepository.getFull(draftId)?.content).toBe(original)
+    expect(() => DraftRepository.updateContent(first.draftId, 'overwrite', 9, true)).toThrow('DRAFT_FINALIZED_READ_ONLY')
+    expect(versions()).toHaveLength(3)
+  })
+
   it('rolls back the new history row, version and content together if finalization fails', () => {
     db.exec(`CREATE TRIGGER reject_outbox BEFORE INSERT ON finalization_outbox BEGIN SELECT RAISE(ABORT, 'outbox rejected'); END`)
     expect(() => finalize()).toThrow('outbox rejected')

@@ -10,12 +10,13 @@ import { getProjectDb } from '../database'
 import { ContentRepository } from './content-repository'
 import { createDraftVersion } from './draft-version'
 import type { DraftSourceDependency } from '../../src/shared/draft-source-dependency'
+import { RECEIPTED_DRAFT_STATUS_SQL, isReceiptedDraftStatus, type DraftStatus } from '../../src/shared/draft-status'
 
 const DRAFT_META_SELECT = `
   SELECT drafts.*, finalization_outbox.chapter_title
   FROM drafts
   LEFT JOIN finalization_outbox
-    ON drafts.status = 'finalized' AND finalization_outbox.draft_id = drafts.id
+    ON drafts.status IN (${RECEIPTED_DRAFT_STATUS_SQL}) AND finalization_outbox.draft_id = drafts.id
 `
 
 /** 草稿元数据（不含正文，适合列表查询） */
@@ -24,7 +25,7 @@ export interface DraftMeta {
     chapterNumber: number
     chapterTitle?: string
     version: number
-    status: string
+    status: DraftStatus
     source: string
     contentId: number
     wordCount: number
@@ -295,7 +296,7 @@ function rowToMeta(
         chapterNumber: row.chapter_number as number,
         ...(chapterTitle ? { chapterTitle } : {}),
         version: row.version as number,
-        status: row.status as string,
+        status: row.status as DraftStatus,
         source: row.source as string,
         contentId: row.content_id as number,
         wordCount: row.word_count as number,
@@ -466,10 +467,10 @@ export class DraftRepository {
         if (!db) return
         const meta = DraftRepository.getMeta(id)
         if (!meta) return
-        if (meta.status === 'finalized' && status !== 'finalized') {
+        if (isReceiptedDraftStatus(meta.status) && status !== meta.status) {
             throw new Error('DRAFT_FINALIZED_READ_ONLY')
         }
-        if (meta.status !== 'finalized' && status === 'finalized') {
+        if (!isReceiptedDraftStatus(meta.status) && isReceiptedDraftStatus(status)) {
             throw new Error('DRAFT_FINALIZATION_REQUIRES_COMMIT')
         }
 
@@ -493,7 +494,7 @@ export class DraftRepository {
         return db.transaction(() => {
             const meta = DraftRepository.getMeta(id)
             if (!meta) throw new Error('DRAFT_NOT_FOUND')
-            if (meta.status === 'finalized' || meta.status === 'archived') {
+            if (isReceiptedDraftStatus(meta.status) || meta.status === 'archived') {
                 throw new Error('DRAFT_FINALIZED_READ_ONLY')
             }
 
@@ -527,6 +528,12 @@ export class DraftRepository {
                 throw Object.assign(
                     new Error('FINALIZED_DRAFT_DELETE_REQUIRED'),
                     { code: 'FINALIZED_DRAFT_DELETE_REQUIRED' as const },
+                )
+            }
+            if (target.status === 'superseded') {
+                throw Object.assign(
+                    new Error('SUPERSEDED_DRAFT_DELETE_FORBIDDEN'),
+                    { code: 'SUPERSEDED_DRAFT_DELETE_FORBIDDEN' as const },
                 )
             }
 
