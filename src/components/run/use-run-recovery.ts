@@ -16,6 +16,10 @@ import {
 import { displayedErrorMessage } from '../../i18n/app-errors'
 
 const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
+const RECOVERY_OPERATIONS = new Set([
+  ...REVIEW_OPERATIONS, 'editor-inline', 'chapter-draft', 'chapter-blueprint-directory',
+  'generate-core-seed', 'character-architecture', 'generate-world-building', 'generate-plot-outline',
+])
 
 function currentSession(): ProjectSessionContext | null {
   return projectSessionContextFromProject(useProjectStore.getState().currentProject)
@@ -30,16 +34,17 @@ async function loadGenerationSources(session: ProjectSessionContext): Promise<{ 
     ipc.invokeWithProjectSession(session, 'generation:list'),
     ipc.invokeWithProjectSession(session, 'generation:list-batches'),
   ])
-  const contexts = await Promise.all(views.filter(view => view.operation !== 'agent-round').map(async view => ({ view,
+  const contextResults = await Promise.allSettled(views.filter(view => !view.operation || RECOVERY_OPERATIONS.has(view.operation)).map(async view => ({ view,
     recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
   })))
+  const contexts = contextResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
   const reviews = await Promise.allSettled(contexts.filter(item => REVIEW_OPERATIONS.includes(item.recovery.operation))
     .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
   const editors = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
     .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
   const ours = (projectId: string) => projectId === session.projectId
   return {
-    partial: [...reviews, ...editors].some(result => result.status === 'rejected'),
+    partial: [...contextResults, ...reviews, ...editors].some(result => result.status === 'rejected'),
     sources: {
       planning: contexts.flatMap(item => (item.recovery.plotOutlineRecovery || item.recovery.blueprintRecovery)
         && item.recovery.planningContinuation?.state !== 'complete' && !item.recovery.plotOutlineRecovery?.inFormalOutline

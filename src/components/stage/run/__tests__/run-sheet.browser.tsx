@@ -241,13 +241,14 @@ describe('运行侧页', () => {
       expect.arrayContaining(['db:recovery-candidate-resolve', '候选甲', 'discarded']))
   })
 
-  it('助手对话不读取工作流恢复上下文，也不阻断普通任务', async () => {
+  it.each(['agent-round', 'plot-tree-snapshot', 'narrative-thread-plan-candidate', 'narrative-thread-event-candidate'])(
+    '%s 不读取工作流恢复上下文，也不阻断普通任务', async operation => {
     const agent = { projectId: session.projectId, epoch: session.leaseId, rootActionId: '助手根', runId: '助手' }
     const draft = { ...agent, rootActionId: '正文根', runId: '正文' }
     const fallback = invoke.getMockImplementation()!
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'generation:list') return [
-        { handle: agent, operation: 'agent-round', status: 'completed', artifacts: [] },
+        { handle: agent, operation, status: 'completed', artifacts: [] },
         { handle: draft, operation: 'chapter-draft', status: 'failed', artifacts: [],
           unsavedTails: [{ attemptId: '请求', artifactId: '尾段', durableRevision: 0, text: '普通任务正文', failureCode: 'STORAGE_FAILED' }] },
       ]
@@ -264,6 +265,29 @@ describe('运行侧页', () => {
     expect(host!.textContent).not.toContain('GENERATION_POLICY_UNSUPPORTED')
     expect(invoke.mock.calls.filter(([channel]) => channel === 'generation:read-context')).toHaveLength(1)
     expect(invoke.mock.calls.find(([channel]) => channel === 'generation:read-context')?.[1]).toEqual({ handle: draft })
+  })
+
+  it('旧记录策略不兼容时保留其他恢复任务，并显示部分读取失败', async () => {
+    const broken = { projectId: session.projectId, epoch: '旧会话', rootActionId: '旧根', runId: '旧记录' }
+    const draft = { ...broken, rootActionId: '正文根', runId: '正文' }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [
+        { handle: broken, status: 'completed', artifacts: [] },
+        { handle: draft, operation: 'chapter-draft', status: 'failed', artifacts: [],
+          unsavedTails: [{ attemptId: '请求', artifactId: '尾段', durableRevision: 0, text: '可恢复的正文', failureCode: 'STORAGE_FAILED' }] },
+      ]
+      if (channel === 'generation:read-context') {
+        if ((args[0] as { handle: { runId: string } }).handle.runId === broken.runId) throw new Error('GENERATION_POLICY_UNSUPPORTED')
+        return { handle: draft, operation: 'chapter-draft', chapterNumber: 1, modelId: '原模型', authorInputs: [],
+          attemptedPurposes: ['chapter-draft'], draftSave: { kind: 'absent' } }
+      }
+      return fallback(channel, ...args)
+    })
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('可恢复的正文'))
+    expect(host!.textContent).toContain('部分任务暂时无法读取')
+    expect(host!.textContent).not.toContain('GENERATION_POLICY_UNSUPPORTED')
   })
 
   it('恢复运行进行中：复制尾段仍可用且不清掉部分任务读取失败的提醒，恢复按钮不被锁住', async () => {
