@@ -148,7 +148,24 @@ export function readMainGenerationPolicy(value: unknown): MainGenerationPolicy {
     if (range.mode !== 'full' && range.mode !== 'append') throw new Error('GENERATION_PLANNING_INTENT_INVALID')
     planning = { kind: 'directory', requestedRange: { mode: range.mode, startChapter: from, endChapter: to } }
   } else throw new Error('GENERATION_POLICY_UNSUPPORTED')
-  if (!isDeepStrictEqual(value, { ...MAIN_GENERATION_POLICY, version: record.version, budget, ...(planning ? { planning } : {}) }))
+  const expected = { ...MAIN_GENERATION_POLICY, version: record.version, budget, ...(planning ? { planning } : {}) }
+  // A previously persisted capacity-policy variant included identical Traditional Chinese
+  // sizing aliases. Accept that exact variant without rewriting frozen bindings.
+  const taskBudgetPolicy = MAIN_GENERATION_POLICY.taskBudgetPolicy
+  const withTraditionalChineseAlias = {
+    ...expected,
+    taskBudgetPolicy: {
+      ...taskBudgetPolicy,
+      draftUnits: { ...taskBudgetPolicy.draftUnits, tokensPerUnit: {
+        ...taskBudgetPolicy.draftUnits.tokensPerUnit, 'zh-TW': taskBudgetPolicy.draftUnits.tokensPerUnit['zh-CN'],
+      } },
+      structuredItems: { ...taskBudgetPolicy.structuredItems, tokensPerItem: {
+        ...taskBudgetPolicy.structuredItems.tokensPerItem, 'zh-TW': taskBudgetPolicy.structuredItems.tokensPerItem['zh-CN'],
+      } },
+    },
+  }
+  if (!isDeepStrictEqual(value, expected)
+    && !(record.version === 's07-capacity-v2' && isDeepStrictEqual(value, withTraditionalChineseAlias)))
     throw new Error('GENERATION_POLICY_UNSUPPORTED')
   return value as MainGenerationPolicy
 }
