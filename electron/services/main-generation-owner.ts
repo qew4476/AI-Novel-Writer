@@ -356,6 +356,19 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     return runSummaries().map(({ handle, status, operation }) => ({ handle, status, operation }))
   }
+  const planningRecoveryDiscarded = (runId: string): boolean => Boolean(deps.database.prepare(
+    "SELECT 1 FROM generation_runs WHERE run_id=? AND json_extract(binding_json,'$.$planningRecoveryDiscarded')=1",
+  ).get(runId))
+  const discardBlueprintRecovery = (handle: MainGenerationRunHandle) => {
+    const run = requireRun(handle)
+    if (run.binding.sourceManifest.operation !== 'chapter-blueprint-directory') throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
+    if ([...pending.keys()].some(key => JSON.parse(key)[0] === run.runId)
+      || repository.budget(run.rootActionId).attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status)))
+      throw new Error('GENERATION_HISTORY_DELETE_ACTIVE')
+    // Keep generated text, receipts and budget history; only retire the recovery task.
+    deps.database.prepare("UPDATE generation_runs SET binding_json=json_set(binding_json,'$.$planningRecoveryDiscarded',json('true')) WHERE run_id=?").run(run.runId)
+    return { discardedRunId: run.runId }
+  }
   const deleteFailedHistory = (handle: MainGenerationRunHandle) => {
     assertCurrent()
     const run = repository.get(handle.runId)
@@ -1047,6 +1060,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
       .flatMap(tail => { const runId = attemptRun.get(tail.attemptId); return typeof runId === 'string' ? [runId] : [] }))
     const collect = {
       planning: (handle: MainGenerationRunHandle) => {
+        if (planningRecoveryDiscarded(handle.runId)) return
         const recovery = readContext(handle)
         if ((recovery.plotOutlineRecovery || recovery.blueprintRecovery) && recovery.planningContinuation?.state !== 'complete'
           && !recovery.plotOutlineRecovery?.inFormalOutline) list.planning.push(recovery)
@@ -1095,6 +1109,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
   const findBlueprintRecovery = (): GenerationRecoveryContext | null => {
     assertCurrent()
     for (const run of runSummaries().filter(item => item.operation === 'chapter-blueprint-directory')) {
+      if (planningRecoveryDiscarded(run.handle.runId)) continue
       let recovery: GenerationRecoveryContext
       try { recovery = readContext(run.handle) } catch { continue }
       if (recovery.blueprintRecovery && recovery.blueprintRecovery.writeState !== 'complete' && recovery.planningContinuation?.state !== 'complete') return recovery
@@ -1547,7 +1562,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     prepareReviewRevision: (request: PrepareReviewRevisionRequest) => reviewRevisions.prepare(request),
     commitReview: (request: ReviewGenerationCommitRequest) => reviewRevisions.commitReview(request, assertSourcesCurrent),
     commitRevision: (request: RevisionGenerationCommitRequest) => reviewRevisions.commitRevision(request, assertSourcesCurrent),
-    readReviewRevisionRecovery, listRecovery, findBlueprintRecovery, deleteFailedHistory,
+    readReviewRevisionRecovery, listRecovery, findBlueprintRecovery, discardBlueprintRecovery, deleteFailedHistory,
     readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)

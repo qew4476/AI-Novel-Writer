@@ -1,4 +1,7 @@
-import { useEffect } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { ipc } from '../../../services/ipc-client'
+import { displayedErrorMessage } from '../../../i18n/app-errors'
+import { fetchChapterDrafts, useDraftStore } from '../../../stores/draft-store'
 import { blueprintWritePrefill } from '../../../services/workflows/chapter-write-launch'
 import type { EditorTab } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -6,7 +9,7 @@ import { navigate } from '../../../stores/navigation/navigation-intents'
 import { useStageStore } from '../../../stores/navigation/stage-store'
 import { openBuiltinEditor } from '../../../stores/open-builtin-editor'
 import { useProjectStore } from '../../../stores/project-store'
-import { captureProjectSession } from '../../project-session-gate'
+import { captureProjectSession, isProjectSessionCurrent, isProjectSessionPath } from '../../project-session-gate'
 import { Button } from '../../ui/Button'
 import { Notice } from '../../ui/Notice'
 import { useStageView } from '../use-stage-work'
@@ -30,6 +33,39 @@ export default function ChapterPlan({ tab, chapterNumber, projectKey }: { tab: E
   const { chapters } = useStageView()
   const row = chapters.find(candidate => candidate.number === chapterNumber)
   const draft = row?.draft ?? null
+  const startingManual = useRef(false)
+  const [manualBusy, setManualBusy] = useState(false)
+  const [manualError, setManualError] = useState<string | null>(null)
+
+  const startManual = async () => {
+    const session = captureProjectSession(useProjectStore.getState().currentProject)
+    if (!session || !isProjectSessionPath(session, projectKey) || startingManual.current || row?.running) return
+    startingManual.current = true
+    setManualBusy(true)
+    setManualError(null)
+    try {
+      let drafts = await fetchChapterDrafts(chapterNumber, session)
+      if (!isProjectSessionCurrent(session)) return
+      if (drafts.length === 0) {
+        const created = await ipc.invokeWithProjectSession(session, 'db:draft-create', {
+          chapterNumber, version: 1, source: 'write', content: '', wordCount: 0,
+        }, session.projectPath)
+        if (!isProjectSessionCurrent(session)) return
+        if (!created.success) throw new Error(created.error || text('无法创建空白草稿', 'Could not create a blank draft'))
+        drafts = await fetchChapterDrafts(chapterNumber, session)
+      }
+      if (!isProjectSessionCurrent(session)) return
+      const latest = drafts[0]
+      if (!latest) throw new Error(text('无法读取草稿', 'Could not read the draft'))
+      await swapChapterTab(tab.id, () => openDraftInChapterView(latest, blueprint?.title ?? row?.title ?? '', session))
+      await useDraftStore.getState().loadChapterDrafts(chapterNumber, projectKey, session)
+    } catch (error) {
+      if (isProjectSessionCurrent(session)) setManualError(displayedErrorMessage(useLocaleStore.getState().locale, error))
+    } finally {
+      startingManual.current = false
+      setManualBusy(false)
+    }
+  }
 
   useEffect(() => {
     const session = captureProjectSession(useProjectStore.getState().currentProject)
@@ -62,17 +98,21 @@ export default function ChapterPlan({ tab, chapterNumber, projectKey }: { tab: E
               </span>
             )}
           />
-          {blueprint && (
-            <div className="stage-ch-actions">
-              <WriteChapterPopover chapterNumber={chapterNumber} blueprint={blueprintWritePrefill(blueprint)} label={text('写作此章', 'Write this chapter')} align="start" />
+          <div className="stage-ch-actions">
+            {blueprint && <WriteChapterPopover chapterNumber={chapterNumber} blueprint={blueprintWritePrefill(blueprint)} label={text('写作此章', 'Write this chapter')} align="start" />}
+            <Button variant="secondary" disabled={manualBusy || Boolean(row?.running)} onClick={() => void startManual()}>
+              {text('手动写作', 'Write manually')}
+            </Button>
+            {blueprint && (
               <span className="stage-ch-hint">
                 {row?.running
                   ? text('这一章正在写，完成后会在这里换成草稿', 'This chapter is being written; the draft replaces this page when it is done')
                   : text('按本章蓝图写作，不再重复填写参数', 'Writes from this chapter’s blueprint; nothing to fill in again')}
               </span>
-            </div>
-          )}
+            )}
+          </div>
           <div className="stage-ch-notices">
+            {manualError && <Notice tone="warn" title={text('无法开始手动写作', 'Could not start manual writing')}>{manualError}</Notice>}
             <DeletionCleanupNotices projectKey={projectKey} chapterNumber={chapterNumber} />
             {row?.running && (
               <Notice
@@ -121,7 +161,7 @@ export default function ChapterPlan({ tab, chapterNumber, projectKey }: { tab: E
           {blueprint && !row?.running && (
             <div className="stage-ch-blank">
               <b>{text('这一章还是空白', 'This chapter is still blank')}</b>
-              {text('点「写作此章」，AI 会按上面的蓝图写出草稿。', 'Choose “Write this chapter” and AI drafts it from the blueprint above.')}
+              {text('点「写作此章」让 AI 按蓝图起草，或点「手动写作」直接输入正文。', 'Choose “Write this chapter” for an AI draft from the blueprint, or “Write manually” to start typing.')}
             </div>
           )}
         </article>

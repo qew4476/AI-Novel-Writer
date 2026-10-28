@@ -320,6 +320,7 @@ export interface GenerationOwnerChannels {
   'generation:read': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:list': { args: []; return: MainGenerationRunSummary[] }
   'generation:cancel': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
+  'generation:discard-blueprint-recovery': { args: [MainGenerationRunHandle]; return: { discardedRunId: string } }
   'generation:delete-failed-history': { args: [MainGenerationRunHandle]; return: { deletedRunId: string } }
   'generation:pause': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:resume': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }

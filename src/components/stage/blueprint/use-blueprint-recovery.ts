@@ -1,3 +1,4 @@
+import { globalEventBus } from '../../../shared/event-bus'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ipc } from '../../../services/ipc-client'
 import { launchCreativeWorkflow } from '../../../services/workflows/creative-workflow-launcher'
@@ -93,6 +94,18 @@ export function useBlueprintRecovery(tab: EditorTab, projectKey: string) {
     registerEditorExitSaveHandler({ tabId: tab.id, type: 'chapter-card', save: () => save(true) })
   }, [save, tab.id])
 
+  const discard = async () => {
+    if (busyRef.current || !session || !isCurrentProjectSession(session) || !context) return
+    busyRef.current = true; setBusy(true)
+    try {
+      await ipc.invokeWithProjectSession(session, 'generation:discard-blueprint-recovery', context.handle)
+      if (!isCurrentProjectSession(session)) return
+      useEditorStore.getState().closeTab(tab.id)
+      globalEventBus.emit('REFRESH_RESOURCE', { resources: ['blueprints'], projectPath: projectKey, projectSession: session })
+    } catch (reason) { setError(failureText(reason)) }
+    finally { busyRef.current = false; setBusy(false) }
+  }
+
   const continuePlanning = async () => {
     if (busyRef.current) return
     busyRef.current = true; setBusy(true)
@@ -119,7 +132,7 @@ export function useBlueprintRecovery(tab: EditorTab, projectKey: string) {
   }
 
   return {
-    context, currentTab, sessionCurrent, busy, error, end, setEnd, save, continuePlanning,
+    context, currentTab, sessionCurrent, busy, error, end, setEnd, save, continuePlanning, discard,
     planningTargetUnit: currentProject?.novelConfig.writingLanguage === 'en-US' ? text('词', 'words') : text('字', 'characters'),
   }
 }

@@ -91,6 +91,11 @@ export function createChapterBackend() {
       case 'db:draft-get-meta': { const draft = byId(args[0]); return draft ? meta(draft) : null }
       case 'db:draft-list': return state.drafts.filter(draft => draft.chapterNumber === Number(args[0])).map(meta)
       case 'db:draft-list-all': return state.drafts.map(meta)
+      case 'db:draft-create': {
+        const request = args[0] as { chapterNumber: number; version: number; content: string }
+        const draft = addDraft({ ...request, status: 'draft' })
+        return { success: true, id: draft.id }
+      }
       case 'db:draft-get-full': { const draft = byId(args[0]); return draft ? { ...meta(draft), content: draft.content } : null }
       case 'db:draft-update-content': {
         const draft = byId(args[0])

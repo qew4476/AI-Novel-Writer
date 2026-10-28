@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { page } from 'vitest/browser'
+import { page, userEvent } from 'vitest/browser'
 import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 
@@ -104,6 +104,35 @@ afterEach(async () => {
 })
 
 describe('单章视图的主按钮随五种状态变化', () => {
+  it.each([3, 4])('待写章 %i：手动写作直接打开可输入、可保存的空白草稿，不依赖蓝图或模型', async chapterNumber => {
+    useLLMStore.setState({ models: [], defaultModelId: null })
+    await mount()
+    await act(async () => openChapterPlan(chapterNumber, '', SESSION))
+    await click('手动写作')
+    await expect.element(page.getByRole('textbox')).toBeVisible()
+    expect(activeTab()).toMatchObject({ chapterNumber, content: '', draftStatus: 'draft' })
+    expect(backend.writes('db:draft-create')).toEqual([[{
+      chapterNumber, version: 1, source: 'write', content: '', wordCount: 0,
+    }, SESSION.projectPath, SESSION]])
+    await act(async () => page.getByRole('textbox').fill('我亲手写下第一句话。'))
+    await act(async () => userEvent.keyboard('{Control>}s{/Control}'))
+    await vi.waitFor(() => expect(backend.state.drafts.some(draft => draft.content === '我亲手写下第一句话。')).toBe(true))
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
+  it('手动写作创建失败时保留待写页并允许重试', async () => {
+    const answer = backend.invoke.getMockImplementation()!
+    backend.invoke.mockImplementation((channel: string, ...args: unknown[]) => channel === 'db:draft-create'
+      ? Promise.resolve({ success: false, error: '保存失败' }) : answer(channel, ...args))
+    await mount()
+    await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))
+    await click('手动写作')
+    await expect.element(page.getByText('无法开始手动写作')).toBeVisible()
+    await expect.element(page.getByRole('button', { name: '手动写作' })).toBeEnabled()
+    expect(activeTab()?.filePath).toBeUndefined()
+    expect(startWorkflow).not.toHaveBeenCalled()
+  })
+
   it('待写：主按钮是写作此章，按本章蓝图启动写作工作流', async () => {
     await mount()
     await act(async () => openChapterPlan(3, BLUEPRINT.title, SESSION))

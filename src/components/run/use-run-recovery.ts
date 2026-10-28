@@ -1,3 +1,4 @@
+import { globalEventBus } from '../../shared/event-bus'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ipc } from '../../services/ipc-client'
 import { createBatchRecoveryWorkflow, createDraftRecoveryWorkflow } from '../../services/workflows/draft-recovery-workflow'
@@ -111,6 +112,11 @@ export function useRunRecovery(): RunRecovery {
     })
     return () => { active = false }
   }, [session])
+
+  useEffect(() => globalEventBus.on('REFRESH_RESOURCE', payload => {
+    if (sameProjectSessionContext(session, payload.projectSession) && payload.resources.some(resource => resource === 'blueprints' || resource === 'all'))
+      setRefreshTick(value => value + 1)
+  }), [session])
 
   /**
    * 工作流之外的生成（选区建议）结束时没有运行历史可看，靠它的最后一次快照触发重读。

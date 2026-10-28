@@ -1,4 +1,5 @@
-import { useId } from 'react'
+import { DangerConfirm } from '../../ui/DangerConfirm'
+import { useId, useState } from 'react'
 import { ChevronRight, Save, Sparkles } from 'lucide-react'
 import { useEditorStore, type EditorTab } from '../../../stores/editor-store'
 import { useLocaleStore } from '../../../stores/locale-store'
@@ -15,6 +16,7 @@ import { useBlueprintRecovery } from './use-blueprint-recovery'
 export default function BlueprintRecovery({ tab, projectKey }: { tab: EditorTab; projectKey: string }) {
   const text = useLocaleStore(state => state.text)
   const endId = useId()
+  const [discardOpen, setDiscardOpen] = useState(false)
   const recovery = useBlueprintRecovery(tab, projectKey)
   const { currentTab, context, busy, sessionCurrent } = recovery
   const candidate = context?.blueprintRecovery
@@ -28,6 +30,14 @@ export default function BlueprintRecovery({ tab, projectKey }: { tab: EditorTab;
 
   return (
     <section className="stage-bp stage-bp-recovery" aria-label={text('蓝图恢复', 'Blueprint recovery')} aria-busy={busy}>
+      <DangerConfirm
+        open={discardOpen} onOpenChange={setDiscardOpen}
+        title={text('丢弃这份蓝图恢复稿？', 'Discard this blueprint recovery draft?')}
+        consequence={text('这份恢复稿将不再显示，未保存的编辑会被丢弃。正式蓝图不受影响。', 'This recovery draft will no longer appear and unsaved edits will be discarded. Saved blueprints are kept.')}
+        recoverability={text('原始生成记录仍会保留。', 'Original generation history is kept.')}
+        confirmLabel={text('丢弃恢复稿', 'Discard recovery draft')} cancelLabel={text('取消', 'Cancel')}
+        onConfirm={() => { setDiscardOpen(false); void recovery.discard() }}
+      />
       <header className="stage-bp-head">
         <div className="stage-bp-heading">
           <div className="stage-bp-kicker">
@@ -36,6 +46,9 @@ export default function BlueprintRecovery({ tab, projectKey }: { tab: EditorTab;
           <h1 className="stage-bp-h1">{text('补齐中断的蓝图', 'Finish the interrupted blueprints')}</h1>
         </div>
         <div className="stage-bp-actions">
+          <Button variant="secondary" disabled={busy || !sessionCurrent} onClick={() => setDiscardOpen(true)}>
+            {text('丢弃恢复稿', 'Discard recovery draft')}
+          </Button>
           <label className="stage-bp-recovery-end" htmlFor={endId}>{text('保存到第几章', 'Last complete chapter')}</label>
           <input
             id={endId}

@@ -681,6 +681,21 @@ describe('planning recovery editors', () => {
     expect([...panel.querySelectorAll('p')].map(paragraph => paragraph.textContent)).toContain(note)
     expect(button('继续生成缺少的章节').disabled).toBe(true); noModel()
   })
+  it('discards blueprint recovery only after confirmation and keeps the tab on failure', async () => {
+    context = fixture('blueprint'); await render('blueprint')
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => root.render(<div className="paper-ink"><BlueprintRecovery tab={useEditorStore.getState().tabs[0]} projectKey={session.projectPath} /></div>))
+    await act(async () => button('Discard recovery draft').click())
+    expect(invoke.mock.calls.some(([channel]) => channel === 'generation:discard-blueprint-recovery')).toBe(false)
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] .pi-btn--danger-solid')!.click())
+    await vi.waitFor(() => expect(invoke.mock.calls.some(([channel]) => channel === 'generation:discard-blueprint-recovery')).toBe(true))
+    expect(useEditorStore.getState().tabs).toHaveLength(1)
+    const previous = invoke.getMockImplementation() as (channel: string, ...args: unknown[]) => Promise<unknown>
+    invoke.mockImplementation(async (channel, ...args) => channel === 'generation:discard-blueprint-recovery' ? { discardedRunId: handle.runId } : previous(channel, ...args))
+    await act(async () => button('Discard recovery draft').click())
+    await act(async () => document.querySelector<HTMLButtonElement>('[role="dialog"] .pi-btn--danger-solid')!.click())
+    await vi.waitFor(() => expect(useEditorStore.getState().tabs).toHaveLength(0))
+  })
   it('closing a recovery tab preserves the ordinary blueprint exit-save handler', async () => {
     context = fixture('blueprint'); await render('blueprint')
     const recoveryId = useEditorStore.getState().tabs[0].id

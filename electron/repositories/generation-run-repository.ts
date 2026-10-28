@@ -124,8 +124,8 @@ export class GenerationRunRepository {
         } | undefined;
         if (!row)
             fail('GENERATION_RUN_MISSING');
-        const { $runEffects, $blueprintRetirement, ...frozen } = JSON.parse(row.binding_json) as RunBinding & { $runEffects?: unknown; $blueprintRetirement?: unknown };
-        void $runEffects; void $blueprintRetirement;
+        const { $runEffects, $blueprintRetirement, $planningRecoveryDiscarded, ...frozen } = JSON.parse(row.binding_json) as RunBinding & { $runEffects?: unknown; $blueprintRetirement?: unknown; $planningRecoveryDiscarded?: boolean };
+        void $runEffects; void $blueprintRetirement; void $planningRecoveryDiscarded;
         return { runId: row.run_id, rootActionId: row.root_action_id, binding: frozen, status: row.status };
     }
     private authorEditedRoot(rootId: string): boolean {
