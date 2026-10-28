@@ -19,8 +19,7 @@ import { paletteItem, type PaletteItem } from './palette-filter'
 import StageSpine from './StageSpine'
 import StageTopBar from './StageTopBar'
 import StageWorkspace from './StageWorkspace'
-import AgentHeader from '../panels/agent/AgentHeader'
-import AgentConversation from '../panels/agent/AgentConversation'
+import StageTools from './StageTools'
 import { CHAPTER_PHASE_TEXT, CHAPTER_RUNNING_TEXT, RESOURCE_NAMES, STAGE_NAMES, stageTabName } from './stage-text'
 import { refreshStageWork, useLandingPage, useStageView, useStageWorkRefresh, type StageView } from './use-stage-work'
 import { useStageShortcuts } from './use-stage-shortcuts'
@@ -174,12 +173,7 @@ export default function StageShell({ theme }: { theme: Theme }) {
           />
         )}
         <StageWorkspace library={library} focus={focus} />
-        {!library && !focus && !settingsOpen && (
-          <aside className="stage-chat" aria-label={text('AI 写作助手', 'AI Writing Assistant')}>
-            <AgentHeader />
-            <AgentConversation />
-          </aside>
-        )}
+        {!library && !focus && <StageTools />}
       </div>
       <StagePalette mode={palette} items={paletteItems} container={root} onClose={() => useStageStore.setState({ palette: null })} />
       <ClearProjectDataDialog open={clearOpen} onClose={() => setClearOpen(false)} onCleared={() => refreshStageWork(text)} />

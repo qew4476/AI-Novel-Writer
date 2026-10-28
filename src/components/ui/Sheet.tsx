@@ -12,6 +12,7 @@ interface SheetProps {
   open: boolean
   title: string
   subtitle?: string
+  headerActions?: ReactNode
   closeLabel: string
   onClose: () => void
   /** 侧页分页；给出时 children 是当前分页的内容。segmented 是标题下一条分段胶囊，underline 是下划线页签。 */
@@ -33,7 +34,7 @@ const TAB_KEYS: Record<string, (index: number, count: number) => number> = {
  * 非模态：打开时焦点移到标题，Tab 可以离开侧页；点在侧页空白处时焦点落在侧页自身（tabIndex=-1），Esc 仍然有效。
  * 关闭时若焦点随侧页一起消失，就还给打开前的元素。
  */
-export function Sheet({ open, title, subtitle, closeLabel, onClose, tabs, footer, wide, children }: SheetProps) {
+export function Sheet({ open, title, subtitle, headerActions, closeLabel, onClose, tabs, footer, wide, children }: SheetProps) {
   const titleId = useId()
   const panelId = useId()
   const titleRef = useRef<HTMLHeadingElement>(null)
@@ -80,6 +81,7 @@ export function Sheet({ open, title, subtitle, closeLabel, onClose, tabs, footer
           <h2 id={titleId} ref={titleRef} tabIndex={-1} className="pi-sheet-title">{title}</h2>
           {subtitle && <p className="pi-sheet-sub">{subtitle}</p>}
         </div>
+        {headerActions}
         <Button variant="icon" size="sm" aria-label={closeLabel} onClick={onClose}>
           <X size={16} aria-hidden />
         </Button>

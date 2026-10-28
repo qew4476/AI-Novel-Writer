@@ -13,6 +13,9 @@ import { Button } from '../ui/Button'
 import { EmptyState } from '../ui/EmptyState'
 import { DangerConfirm } from '../ui/DangerConfirm'
 import RunSheet from './run/RunSheet'
+import AgentHeader from '../panels/agent/AgentHeader'
+import AgentConversation from '../panels/agent/AgentConversation'
+import { Sheet } from '../ui/Sheet'
 import StageArchitecture from './architecture/StageArchitecture'
 import StageCharacters from './characters/StageCharacters'
 import StageLibrary from './library/StageLibrary'
@@ -127,7 +130,7 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
   const activeTab = tabs.find(tab => tab.id === activeTabId)
   useEffect(() => installChapterTabRouting(), [])
   // 窗口变窄让侧页浮起时没有焦点事件，焦点可能还停在刚被盖住的控件上：主区域尺寸变化时查一次。
-  const sheetMounted = sheet?.kind === 'run' && !focus && !library && project !== null
+  const sheetMounted = (sheet?.kind === 'run' || sheet?.kind === 'assistant') && !focus && !library && project !== null
   useEffect(() => {
     const slot = sheetSlotRef.current
     const body = slot?.parentElement
@@ -193,10 +196,16 @@ export default function StageWorkspace({ library, focus }: { library: boolean; f
               />
             )}
         </div>
-        {sheet?.kind === 'run' && !focus && (
-          <div ref={sheetSlotRef} className="stage-sheet-slot" data-wide={sheet.tab === 'diagnostics' || undefined}>
-            <ErrorBoundary fallbackLabel={text('运行侧页渲染失败', 'Run sheet failed to render')}>
-              <RunSheet sheet={sheet} />
+        {(sheet?.kind === 'run' || sheet?.kind === 'assistant') && !focus && (
+          <div ref={sheetSlotRef} className="stage-sheet-slot" data-wide={(sheet.kind === 'run' && sheet.tab === 'diagnostics') || undefined}>
+            <ErrorBoundary fallbackLabel={sheet.kind === 'run' ? text('运行侧页渲染失败', 'Run sheet failed to render') : text('写作助手渲染失败', 'Writing assistant failed to render')}>
+              {sheet.kind === 'run' ? <RunSheet sheet={sheet} /> : (
+                <Sheet open title={text('AI 写作助手', 'AI Writing Assistant')} headerActions={<AgentHeader compact />} closeLabel={text('收起写作助手', 'Close writing assistant')} onClose={() => useStageStore.setState({ sheet: null })}>
+                  <div className="stage-chat">
+                    <div className="stage-chat-body"><AgentConversation /></div>
+                  </div>
+                </Sheet>
+              )}
             </ErrorBoundary>
           </div>
         )}

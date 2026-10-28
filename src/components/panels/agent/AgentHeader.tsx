@@ -13,7 +13,7 @@ import { pluralEn } from '../../../shared/plural-en'
 /**
  * Agent 面板顶部工具栏
  */
-export default function AgentHeader() {
+export default function AgentHeader({ compact = false }: { compact?: boolean }) {
   const text = useLocaleStore(s => s.text)
   const { createConversation, toggleHistory, showHistory, getActiveConversation } = useAgentStore()
   const [showMore, setShowMore] = useState(false)
@@ -44,17 +44,17 @@ export default function AgentHeader() {
     <div
       className="no-select flex items-center justify-between gap-1.5 px-2 flex-shrink-0"
       style={{
-        height: 'var(--height-panel-header)',
-        borderBottom: '1px solid var(--color-border)',
+        height: compact ? undefined : 'var(--height-panel-header)',
+        borderBottom: compact ? undefined : '1px solid var(--color-border)',
       }}
     >
       {/* 标题 */}
-      <div
+      {!compact && <div
         className="flex min-w-0 items-center overflow-hidden text-ellipsis whitespace-nowrap gap-1"
         style={{ color: 'var(--color-text-secondary)', fontSize: '0.75rem', fontWeight: 500 }}
       >
         {text('AI 写作助手', 'AI Writing Assistant')}
-      </div>
+      </div>}
 
       {/* 右侧工具按钮组 */}
       <div className="flex items-center gap-1.5 px-0.5 flex-shrink-0">
