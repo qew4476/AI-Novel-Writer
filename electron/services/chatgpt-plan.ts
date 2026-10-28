@@ -192,7 +192,7 @@ async function signIn(): Promise<ReturnType<typeof chatgptPlanStatus>> {
 export function chatgptPlanExecutionIdentity(): string {
   const saved = readCredentials()
   if (!saved?.scopes.includes('chatgpt.tokens.use.direct') || !saved.scopes.includes('resource.invoke')) {
-    throw new Error('Connect your ChatGPT plan in model settings / 请先在模型设置中连接 ChatGPT 订阅')
+    throw new Error('CHATGPT_PLAN_CONNECTION_REQUIRED')
   }
   if (!saved.sessionId) {
     saved.sessionId = randomUUID()
@@ -205,7 +205,7 @@ export async function chatgptPlanAccessToken(expectedIdentity?: string): Promise
   const identity = expectedIdentity ?? chatgptPlanExecutionIdentity()
   const assertIdentity = () => {
     if (chatgptPlanExecutionIdentity() !== identity) {
-      throw new Error('ChatGPT connection changed; start a new task / ChatGPT 连接已变更，请重新开始任务')
+      throw new Error('CHATGPT_PLAN_CONNECTION_CHANGED')
     }
   }
   assertIdentity()

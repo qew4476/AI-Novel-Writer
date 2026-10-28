@@ -2,6 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { appErrorMessage, displayedErrorMessage, knownAppErrorMessage } from '../app-errors'
 
 describe('localized application errors', () => {
+  it.each([
+    ['CHATGPT_PLAN_CONNECTION_REQUIRED', '请先在模型设置中连接 ChatGPT 订阅。', 'Connect your ChatGPT plan in model settings.'],
+    ['CHATGPT_PLAN_CONNECTION_CHANGED', 'ChatGPT 连接已变更，请重新开始任务。', 'ChatGPT connection changed; start a new task.'],
+  ])('localizes %s through IPC error wrappers', (code, zh, en) => {
+    const wrapped = new Error(`Error invoking remote method 'llm:test': Error: ${code}`)
+    expect(displayedErrorMessage('zh-CN', wrapped)).toBe(zh)
+    expect(displayedErrorMessage('en-US', wrapped)).toBe(en)
+  })
   it('maps stable error codes to localized messages', () => {
     expect(appErrorMessage('en-US', { code: 'KNOWLEDGE_BASE_NATIVE_UNAVAILABLE' }))
       .toContain('Windows native component')

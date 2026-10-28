@@ -113,6 +113,8 @@ export const zhCN = {
   'error.stageModelUnavailable': '这个模型已删除或不能用于文本生成，这个环节保留原来的模型。请在「分工模型」里另选一个。',
   'error.stageModelRequestInvalid': '请求无效，这次分工设置没有保存。请重新打开设置再选一次。',
   'error.defaultModelRollbackFailed': '模型没有删除，默认模型设置也没能恢复。请检查用户配置目录能否写入，再到设置里重新选择默认模型。',
+  'error.chatgptPlanConnectionRequired': '请先在模型设置中连接 ChatGPT 订阅。',
+  'error.chatgptPlanConnectionChanged': 'ChatGPT 连接已变更，请重新开始任务。',
   'error.modelEndpointInvalid': '模型的 Base URL 无效。请在设置里改正这个模型的 Base URL 后重试。',
   'error.mcpConfigInvalid': 'MCP 配置文件损坏或无法读取，没有加载任何服务器。请检查用户配置目录里的 MCP 配置。',
   'error.mcpConnectFailed': 'MCP 服务器连接失败。请检查配置里的启动命令与参数，确认它能在本机运行。',

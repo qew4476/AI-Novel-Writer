@@ -7,6 +7,8 @@ import type { Locale } from './types'
  * 要么在 generation-error-codes.test.ts 里写明不登记的理由。
  */
 const ERROR_KEYS = {
+  CHATGPT_PLAN_CONNECTION_REQUIRED: 'error.chatgptPlanConnectionRequired',
+  CHATGPT_PLAN_CONNECTION_CHANGED: 'error.chatgptPlanConnectionChanged',
   KNOWLEDGE_BASE_NATIVE_UNAVAILABLE: 'error.knowledgeBaseNativeUnavailable',
   LEGACY_VECTOR_MIGRATION_BLOCKED: 'error.legacyVectorMigrationBlocked',
   PROJECT_NOT_OPEN: 'error.projectNotOpen',

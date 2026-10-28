@@ -225,7 +225,7 @@ export class ModelExecutionLeaseRegistry {
     }
     if (record.snapshot.provider === 'chatgpt-plan'
       && (record.snapshot as ExecutionModelProfile).chatgptPlanExecutionIdentity !== this.executionIdentity?.()) {
-      throw new Error('ChatGPT connection changed; start a new task / ChatGPT 连接已变更，请重新开始任务')
+      throw new Error('CHATGPT_PLAN_CONNECTION_CHANGED')
     }
     return cloneModelProfile(record.snapshot)
   }

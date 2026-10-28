@@ -111,6 +111,8 @@ export const enUS = {
   'error.stageModelUnavailable': 'That model was deleted or is no longer available for writing, so the stage keeps its current model. Choose another model in Models by stage.',
   'error.stageModelRequestInvalid': 'The stage setting was not saved because the request was not valid. Reopen Settings and choose again.',
   'error.defaultModelRollbackFailed': 'The model was not deleted, and the default model settings could not be restored. Check that your user configuration directory is writable, then choose the default models again in Settings.',
+  'error.chatgptPlanConnectionRequired': 'Connect your ChatGPT plan in model settings.',
+  'error.chatgptPlanConnectionChanged': 'ChatGPT connection changed; start a new task.',
   'error.modelEndpointInvalid': 'The model’s Base URL is invalid. Correct it in Settings, then try again.',
   'error.mcpConfigInvalid': 'The MCP configuration file is damaged or unreadable, so no servers were loaded. Check the MCP configuration in your user configuration directory.',
   'error.mcpConnectFailed': 'Could not connect to the MCP server. Check the start command and arguments in the configuration, and make sure the server runs on this computer.',
