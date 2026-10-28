@@ -3,6 +3,9 @@ import type { MessageKey } from './en-US'
 import { APP_BRAND } from '../../shared/brand'
 
 export const zhCN = {
+  'error.generationHistoryDeleteActive': '此任务或同组任务仍在运行，请结束运行后再删除。',
+  'error.generationHistoryDeleteReferenced': '其他任务仍引用这笔记录，暂时无法单独删除。',
+  'error.generationHistoryDeleteReadable': '此任务或同组任务仍可读取，已取消删除。请刷新后检查恢复内容。',
   'app.windowTitle': `${APP_BRAND.zhName} ${APP_BRAND.enName}`,
   'error.knowledgeBaseNativeUnavailable': '知识库不可用：Windows 原生组件加载失败。请重新安装或下载完整发布包。',
   'error.legacyVectorMigrationBlocked': '旧版知识库数据需要先修复后才能继续。请修正项目中的 vectors.json，然后重试。',

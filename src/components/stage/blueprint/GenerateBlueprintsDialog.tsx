@@ -17,18 +17,16 @@ export default function GenerateBlueprintsDialog(props: DirectoryConfigProps) {
   const form = useDirectoryConfigForm(props)
   const ids = { targetUnits: useId(), pacing: useId(), range: useId() }
   if (!form) return null
-  const { text, total, appendStart, hasPriorAuthority } = form
+  const { text, total, hasPriorBlueprints } = form
   const busy = form.isConfirming || form.isRecovering
   // 指定范围只从接着的那一章往后补，从不覆盖已有蓝图，所以这时不给覆盖选项。
-  const showExisting = (props.existingCount > 0 || hasPriorAuthority) && form.rangeMode !== 'range'
+  const showExisting = (props.existingCount > 0 || hasPriorBlueprints) && form.rangeMode !== 'range'
   const overwrite = showExisting && form.overwriteMode === 'full'
   const zh = resolveWritingLanguage(form.currentProject.novelConfig.writingLanguage) === 'zh-CN'
 
   const description = props.existingCount > 0
     ? text(`按情节大纲为章节生成蓝图。已有 ${props.existingCount} 章蓝图，默认保留不动。`, `Generate chapter blueprints from the plot outline. ${props.existingCount} existing ${pluralEn(props.existingCount, 'blueprint')} ${pluralEn(props.existingCount, 'is', 'are')} kept by default.`)
-    : hasPriorAuthority
-      ? text(`正文已定稿到第 ${appendStart - 1} 章，蓝图从第 ${appendStart} 章开始。`, `The manuscript is finalized through chapter ${appendStart - 1}; blueprints start at chapter ${appendStart}.`)
-      : text(`按情节大纲为章节生成蓝图。作品共 ${total} 章。`, `Generate chapter blueprints from the plot outline. The book has ${total} ${pluralEn(total, 'chapter')}.`)
+    : text(`按情节大纲为章节生成蓝图。作品共 ${total} 章。`, `Generate chapter blueprints from the plot outline. The book has ${total} ${pluralEn(total, 'chapter')}.`)
 
   return (
     <InkDialog

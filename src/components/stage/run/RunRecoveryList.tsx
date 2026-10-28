@@ -6,6 +6,7 @@ import { useProjectStore } from '../../../stores/project-store'
 import type { WorkflowRun } from '../../../stores/workflow-store'
 import { canResumeDraft, isInFlight, type CandidateEntry, type DraftEntry, type RecoveryEntry } from '../../run/run-recovery'
 import type { RunRecovery } from '../../run/use-run-recovery'
+import type { RecoveryLoadFailure } from '../../run/recovery-load-failure'
 import { Button } from '../../ui/Button'
 import { Check } from '../../ui/Check'
 import { InlineConfirm } from '../../ui/InlineConfirm'
@@ -22,9 +23,31 @@ export function RunRecoveryList({ recovery, liveRuns }: { recovery: RunRecovery;
   if (!entries.length && !errors.length) return null
   return (
     <section className="run-recovery" aria-label={text('可恢复的内容', 'Recoverable work')}>
-      {errors.map(error => <p key={error} className="run-note" data-tone="danger" role="alert">{error}</p>)}
+      {errors.map(error => <p key={error} className="run-note whitespace-pre-line" data-tone="danger" role="alert">{error}</p>)}
+      {recovery.loadFailures.map(failure => <FailedRecoveryCard key={failure.runId} failure={failure} recovery={recovery} text={text} />)}
       {entries.map(entry => <RecoveryCard key={`${entry.kind}:${entry.key}`} entry={entry} recovery={recovery} text={text} />)}
     </section>
+  )
+}
+
+function FailedRecoveryCard({ failure, recovery, text }: { failure: RecoveryLoadFailure; recovery: RunRecovery; text: Text }) {
+  const [confirming, setConfirming] = useState(false)
+  const deleteButton = useRef<HTMLButtonElement>(null)
+  return (
+    <article className="run-card">
+      <p className="run-note" data-tone="danger" role="alert">{failure.message}</p>
+      {confirming ? <InlineConfirm
+        message={text('永久删除此任务的恢复记录和生成片段，删除后无法恢复。草稿箱中的稿件与已保存的审稿报告会保留。',
+          'Permanently delete this task’s recovery records and generated fragments. This cannot be undone. Drafts and saved review reports will be kept.')}
+        confirmLabel={text('确认删除', 'Confirm delete')}
+        cancelLabel={text('取消', 'Cancel')}
+        onConfirm={() => { setConfirming(false); recovery.deleteFailedRun(failure.runId) }}
+        onCancel={() => setConfirming(false)}
+        returnFocusRef={deleteButton}
+      /> : <Button ref={deleteButton} variant="danger" size="sm" disabled={recovery.busy} onClick={() => setConfirming(true)}>
+        {text('删除此旧任务…', 'Delete this old task…')}
+      </Button>}
+    </article>
   )
 }
 

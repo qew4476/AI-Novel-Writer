@@ -7,6 +7,9 @@ import type { Locale } from './types'
  * 要么在 generation-error-codes.test.ts 里写明不登记的理由。
  */
 const ERROR_KEYS = {
+  GENERATION_HISTORY_DELETE_ACTIVE: 'error.generationHistoryDeleteActive',
+  GENERATION_HISTORY_DELETE_REFERENCED: 'error.generationHistoryDeleteReferenced',
+  GENERATION_HISTORY_DELETE_READABLE: 'error.generationHistoryDeleteReadable',
   CHATGPT_PLAN_CONNECTION_REQUIRED: 'error.chatgptPlanConnectionRequired',
   CHATGPT_PLAN_CONNECTION_CHANGED: 'error.chatgptPlanConnectionChanged',
   KNOWLEDGE_BASE_NATIVE_UNAVAILABLE: 'error.knowledgeBaseNativeUnavailable',

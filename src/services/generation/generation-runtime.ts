@@ -98,6 +98,7 @@ export interface MainGenerationReasoningEvent extends MainGenerationRunHandle {
   text: string
 }
 export interface MainGenerationRunView {
+  chapterNumber?: number
   plotOutline?: import('../../shared/plot-outline-contract').PlotOutlineProgress
   budgetDiagnostics?: readonly import('./task-budget-planner').GenerationBudgetDiagnostic[]
   operation?: string

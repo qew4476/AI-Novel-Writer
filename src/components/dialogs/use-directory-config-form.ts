@@ -90,7 +90,6 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
   const [isRecoveryLoading, setIsRecoveryLoading] = useState(false)
   const [isRecovering, setIsRecovering] = useState(false)
   const [recoveryError, setRecoveryError] = useState<string | null>(null)
-  const [authoritativeNextChapter, setAuthoritativeNextChapter] = useState<number | null>(null)
   const [highestBlueprintChapter, setHighestBlueprintChapter] = useState<number | null>(null)
   const [authorityError, setAuthorityError] = useState<string | null>(null)
   const [authorityLoading, setAuthorityLoading] = useState(false)
@@ -166,14 +165,13 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
     const loadAuthority = async () => {
       setAuthorityLoading(true)
       try {
-        const [nextChapter, highestBlueprint] = await Promise.all([
+        const [, highestBlueprint] = await Promise.all([
           readAuthoritativeNextChapter(projectSession, locale),
           readHighestBlueprintChapter(currentProject.path, projectSession),
         ])
         if (disposed || !isProjectSessionCurrent(projectSession)) return
-        setAuthoritativeNextChapter(nextChapter)
         setHighestBlueprintChapter(highestBlueprint)
-        const appendStart = Math.max(highestBlueprint + 1, nextChapter)
+        const appendStart = highestBlueprint + 1
         const defaultsKey = `${projectSession.projectId}:${projectSession.leaseId}:${appendStart}`
         if (rangeDefaultsFor.current !== defaultsKey) {
           rangeDefaultsFor.current = defaultsKey
@@ -183,7 +181,6 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
         setAuthorityError(null)
       } catch (cause) {
         if (disposed || !isProjectSessionCurrent(projectSession)) return
-        setAuthoritativeNextChapter(null)
         setHighestBlueprintChapter(null)
         setAuthorityError(displayedErrorMessage(useLocaleStore.getState().locale, cause))
       } finally {
@@ -196,9 +193,9 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
 
   if (!currentProject) return null
   const total = currentProject.novelConfig.totalChapters
-  const appendStart = Math.max((highestBlueprintChapter ?? 0) + 1, authoritativeNextChapter ?? 1)
-  const hasPriorAuthority = appendStart > 1
-  const appendByDefault = overwriteMode === 'append' && (existingCount > 0 || hasPriorAuthority)
+  const appendStart = (highestBlueprintChapter ?? 0) + 1
+  const hasPriorBlueprints = appendStart > 1
+  const appendByDefault = overwriteMode === 'append' && (existingCount > 0 || hasPriorBlueprints)
   const selectedRangeStart = Math.min(total, Math.max(appendStart, Number(rangeStart) || appendStart))
   const selectedRangeEnd = Math.min(total, Math.max(selectedRangeStart, Number(rangeEnd) || selectedRangeStart))
   const previewParams: DirectoryWorkflowParams = rangeMode === 'full'
@@ -254,14 +251,12 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
       ))
       return
     }
-    let frozenAuthoritativeNext: number
     let frozenHighestBlueprint: number
     try {
       const authority = await Promise.all([
         readAuthoritativeNextChapter(projectSession, locale),
         readHighestBlueprintChapter(currentProject.path, projectSession),
       ])
-      frozenAuthoritativeNext = authority[0]
       frozenHighestBlueprint = authority[1]
     } catch (error) {
       if (!isProjectSessionCurrent(projectSession)) return
@@ -269,10 +264,9 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
       return
     }
     if (!isProjectSessionCurrent(projectSession)) return
-    setAuthoritativeNextChapter(frozenAuthoritativeNext)
     setHighestBlueprintChapter(frozenHighestBlueprint)
     setAuthorityError(null)
-    const frozenAppendStart = Math.max(frozenHighestBlueprint + 1, frozenAuthoritativeNext)
+    const frozenAppendStart = frozenHighestBlueprint + 1
     const frozenAppendByDefault = overwriteMode === 'append'
       && (existingCount > 0 || frozenAppendStart > 1)
 
@@ -339,7 +333,7 @@ export function useDirectoryConfigForm({ isOpen, onClose, existingCount, onConfi
   const progressShown = progressSessionKey === currentProject.id + ':' + currentProject.sessionLease
 
   return {
-    text, currentProject, total, appendStart, hasPriorAuthority, previewCost,
+    text, currentProject, total, appendStart, hasPriorBlueprints, previewCost,
     rangeMode, setRangeMode, overwriteMode, setOverwriteMode, frontN, setFrontN, rangeStart, setRangeStart, rangeEnd, setRangeEnd,
     targetUnits, setTargetUnits, preferenceLoading, pacingGuidance, setPacingGuidance,
     isConfirming, launchError, authorityError, authorityLoading,

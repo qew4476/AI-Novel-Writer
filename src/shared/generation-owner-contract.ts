@@ -307,6 +307,7 @@ export interface GenerationOwnerChannels {
   'generation:read': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:list': { args: []; return: MainGenerationRunView[] }
   'generation:cancel': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
+  'generation:delete-failed-history': { args: [MainGenerationRunHandle]; return: { deletedRunId: string } }
   'generation:pause': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:resume': { args: [MainGenerationRunHandle]; return: MainGenerationRunView }
   'generation:restart': { args: [MainGenerationRunHandle, BeginGenerationRequest]; return: MainGenerationRunView }

@@ -145,6 +145,7 @@ describe('蓝图阶段', () => {
   })
 
   it('清空全部蓝图在危险分组里，确认前不清空，确认后列表为空并出现空状态', async () => {
+    nextChapter = 10
     await renderPage()
     await act(async () => page.getByRole('button', { name: '更多蓝图操作' }).click())
     const dangerGroup = page.getByRole('group', { name: '危险' })
@@ -163,9 +164,19 @@ describe('蓝图阶段', () => {
     await vi.waitFor(() => expect(calls('db:blueprint-clear-all')).toHaveLength(1))
     await expect.element(page.getByRole('heading', { name: '还没有章节蓝图' })).toBeVisible()
     expect(page.getByRole('complementary', { name: '章节规划' }).query()).toBeNull()
+
+    await act(async () => page.getByRole('button', { name: 'AI 生成蓝图' }).click())
+    const generation = page.getByRole('dialog', { name: 'AI 生成蓝图' })
+    await expect.element(generation.getByRole('spinbutton', { name: '蓝图起始章' })).toHaveValue(1)
+    expect(generation.element().textContent).not.toContain('正文已定稿')
+    await act(async () => generation.getByRole('button', { name: '取消' }).click())
+    await act(async () => page.getByRole('button', { name: '更多蓝图操作' }).click())
+    await act(async () => page.getByRole('menuitem', { name: '新建章节' }).click())
+    await expect.element(page.getByRole('button', { name: /^1\D/ })).toBeVisible()
   })
 
   it('删除此章在单章的危险分组里，确认后只删这一章', async () => {
+    nextChapter = 10
     await renderPage()
     await act(async () => page.getByRole('button', { name: /^3\D/ }).click())
     await act(async () => page.getByRole('button', { name: '第 3 章更多操作' }).click())
@@ -177,6 +188,9 @@ describe('蓝图阶段', () => {
     await vi.waitFor(() => expect(calls('db:blueprint-delete').map(call => call[1])).toEqual([3]))
     await expect.element(page.getByRole('button', { name: /^3\D/ })).not.toBeInTheDocument()
     await expect.element(page.getByRole('button', { name: /^2\D/ })).toBeVisible()
+    await act(async () => page.getByRole('button', { name: '更多蓝图操作' }).click())
+    await act(async () => page.getByRole('menuitem', { name: '新建章节' }).click())
+    await expect.element(page.getByRole('button', { name: /^3\D/ })).toBeVisible()
   })
 
   it('改字段后由外壳的保存（⌘S 同一入口）存全部，页面里不另显示未保存', async () => {

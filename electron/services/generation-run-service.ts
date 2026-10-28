@@ -340,6 +340,9 @@ export function createGenerationRunService(deps: GenerationRunServiceDependencie
             if (failure) throw failure;
         },
         readUnsavedTails: (): readonly GenerationUnsavedTail[] => Object.freeze([...unsavedTails.values()]),
+        forgetDeletedAttempts: (attemptIds: readonly string[]) => {
+            for (const id of attemptIds) unsavedTails.delete(id);
+        },
         get: (runId: string) => deps.repository.get(runId),
         readAttempt: (attemptId: string) => deps.repository.receipt(attemptId),
         listCandidates: () => deps.repository.listCandidates(),

@@ -15,6 +15,8 @@ import {
 } from './run-recovery'
 import { displayedErrorMessage } from '../../i18n/app-errors'
 import { throwIfTerminalProviderFailure } from '../../services/generation/generation-harness'
+import { recoveryLoadFailure, type RecoveryLoadFailure } from './recovery-load-failure'
+import type { Locale } from '../../i18n/types'
 
 const REVIEW_OPERATIONS = ['review-chapter', 'refine-draft', 'refine-from-review']
 const RECOVERY_OPERATIONS = new Set([
@@ -30,22 +32,32 @@ function currentSession(): ProjectSessionContext | null {
  * 读取这部作品所有可恢复的中断运行。助手任务（agent-round）随聊天隐藏，不读取也不列出，磁盘记录保留。
  * 规划恢复稿只列没写进正式内容的：续写已完成的，或来源变了但本批已原样在正式大纲里的，都不算可恢复。
  */
-async function loadGenerationSources(session: ProjectSessionContext): Promise<{ sources: Omit<RecoverySources, 'candidates'>; partial: boolean }> {
+async function loadGenerationSources(session: ProjectSessionContext, locale: Locale): Promise<{ sources: Omit<RecoverySources, 'candidates'>; failures: RecoveryLoadFailure[] }> {
   const [views, progress] = await Promise.all([
     ipc.invokeWithProjectSession(session, 'generation:list'),
     ipc.invokeWithProjectSession(session, 'generation:list-batches'),
   ])
-  const contextResults = await Promise.allSettled(views.filter(view => !view.operation || RECOVERY_OPERATIONS.has(view.operation)).map(async view => ({ view,
+  const contextViews = views.filter(view => !view.operation || RECOVERY_OPERATIONS.has(view.operation))
+  const failure = (view: typeof views[number], reason: unknown): RecoveryLoadFailure => ({
+    runId: view.handle.runId, handle: view.handle, message: recoveryLoadFailure(view, reason, locale),
+  })
+  const contextResults = await Promise.allSettled(contextViews.map(async view => ({ view,
     recovery: await ipc.invokeWithProjectSession(session, 'generation:read-context', { handle: view.handle }),
   })))
   const contexts = contextResults.flatMap(result => result.status === 'fulfilled' ? [result.value] : [])
-  const reviews = await Promise.allSettled(contexts.filter(item => REVIEW_OPERATIONS.includes(item.recovery.operation))
+  const reviewContexts = contexts.filter(item => REVIEW_OPERATIONS.includes(item.recovery.operation))
+  const reviews = await Promise.allSettled(reviewContexts
     .map(async ({ view }) => ({ view, recovery: await ipc.invokeWithProjectSession(session, 'review-revision:read-recovery', { handle: view.handle }) })))
-  const editors = await Promise.allSettled(contexts.filter(item => item.recovery.operation === 'editor-inline')
+  const editorContexts = contexts.filter(item => item.recovery.operation === 'editor-inline')
+  const editors = await Promise.allSettled(editorContexts
     .map(({ view }) => ipc.invokeWithProjectSession(session, 'editor-inline:read-recovery', { handle: view.handle })))
   const ours = (projectId: string) => projectId === session.projectId
   return {
-    partial: [...contextResults, ...reviews, ...editors].some(result => result.status === 'rejected'),
+    failures: [
+      ...contextResults.flatMap((result, index) => result.status === 'rejected' ? [failure(contextViews[index], result.reason)] : []),
+      ...reviews.flatMap((result, index) => result.status === 'rejected' ? [failure(reviewContexts[index].view, result.reason)] : []),
+      ...editors.flatMap((result, index) => result.status === 'rejected' ? [failure(editorContexts[index].view, result.reason)] : []),
+    ],
     sources: {
       planning: contexts.flatMap(item => (item.recovery.plotOutlineRecovery || item.recovery.blueprintRecovery)
         && item.recovery.planningContinuation?.state !== 'complete' && !item.recovery.plotOutlineRecovery?.inFormalOutline
@@ -73,6 +85,8 @@ export interface RunRecovery {
   candidateError: string
   /** 中断运行的读取或操作失败。 */
   generationError: string
+  loadFailures: RecoveryLoadFailure[]
+  deleteFailedRun: (runId: string) => void
   busy: boolean
   picked: (entry: DraftEntry) => readonly string[]
   togglePick: (entry: DraftEntry, artifactId: string, checked: boolean) => void
@@ -102,10 +116,20 @@ export function useRunRecovery(): RunRecovery {
   const [generationList, setGeneration] = useState<Loaded<Omit<RecoverySources, 'candidates'>>>({ session: null, value: EMPTY_RECOVERY_SOURCES })
   // 读取失败随下一次读取更新；操作失败留到下一次操作，刷新不清掉它。
   const [loadError, setLoadError] = useState('')
+  const [failedLoads, setFailedLoads] = useState<Loaded<RecoveryLoadFailure[]>>({ session: null, value: [] })
   const [actionError, setActionError] = useState<{ session: ProjectSessionContext | null; message: string }>({ session: null, message: '' })
   const [snapshotTick, setSnapshotTick] = useState(0)
   const [selection, setSelection] = useState<Record<string, string[]>>({})
   const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    // Retire the earlier local ignore preference; deleted task records need no ignore list.
+    try {
+      for (const key of Object.keys(window.localStorage)) {
+        if (key.startsWith('vela:ignored-recovery:')) window.localStorage.removeItem(key)
+      }
+    } catch { /* Local preferences may be unavailable; recovery no longer depends on them. */ }
+  }, [])
 
   useEffect(() => {
     if (!session) {
@@ -139,10 +163,11 @@ export function useRunRecovery(): RunRecovery {
   useEffect(() => {
     if (!session) return
     let active = true
-    void loadGenerationSources(session).then(({ sources, partial }) => {
+    void loadGenerationSources(session, locale).then(({ sources, failures }) => {
       if (!active) return
       setGeneration({ session, value: sources })
-      setLoadError(partial ? (locale === 'en-US' ? 'Some tasks could not be loaded; the other candidates remain available.' : '部分任务暂时无法读取，其他候选仍可恢复。') : '')
+      setFailedLoads({ session, value: failures })
+      setLoadError('')
     }).catch(reason => { if (active) setLoadError(displayedErrorMessage(useLocaleStore.getState().locale, reason)) })
     return () => { active = false }
   }, [session, endedRuns, locale, snapshotTick])
@@ -154,6 +179,10 @@ export function useRunRecovery(): RunRecovery {
   }, [session, generationList, candidateList, locale])
 
   const stillCurrent = useCallback(() => session !== null && sameProjectSessionContext(session, currentSession()), [session])
+  const loadFailures = sameProjectSessionContext(failedLoads.session, session) ? failedLoads.value : []
+  const partialError = loadFailures.length ? (locale === 'en-US'
+    ? 'Some tasks could not be loaded; the other candidates remain available.'
+    : '部分任务暂时无法读取，其他候选仍可恢复。') : ''
 
   const act = useCallback(async (operation: (session: ProjectSessionContext) => Promise<void>) => {
     if (busy || !session || !stillCurrent()) return
@@ -188,7 +217,17 @@ export function useRunRecovery(): RunRecovery {
   return {
     entries,
     candidateError,
-    generationError: (sameProjectSessionContext(actionError.session, session) && actionError.message) || loadError,
+    generationError: (sameProjectSessionContext(actionError.session, session) && actionError.message) || loadError || partialError,
+    loadFailures,
+    deleteFailedRun: runId => void act(async current => {
+      const failure = loadFailures.find(item => item.runId === runId)
+      if (!failure) return
+      await ipc.invokeWithProjectSession(current, 'generation:delete-failed-history', failure.handle)
+      if (!stillCurrent()) return
+      setFailedLoads(loaded => sameProjectSessionContext(loaded.session, current)
+        ? { ...loaded, value: loaded.value.filter(item => item.runId !== runId) } : loaded)
+      setSnapshotTick(value => value + 1)
+    }),
     busy,
     picked: entry => selection[entry.key] ?? [],
     togglePick: (entry, artifactId, checked) => setSelection(previous => {

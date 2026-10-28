@@ -51,6 +51,7 @@ import { LegacyRosterGeneration } from './legacy-roster-generation'
 import { readLegacyRosterGenerationProof } from './legacy-roster-generation-proof'
 import { readLegacyRosterGenerationContext } from './legacy-roster-generation-context'
 import { readPortableRuntimeFreeze } from './portable-runtime-freeze'
+import { deleteGenerationHistory } from '../repositories/delete-generation-history'
 import { readLegacyRosterSource, adoptLegacyCards } from './legacy-roster-source'
 import { buildLegacyRosterJsonRepairTask, buildLegacyRosterReplacementTask, parseLegacyRosterJson } from '../../src/shared/legacy-roster-generation-pure'
 import { validateGraphGenerationInput, readGraphGenerationContext } from './graph-generation-source'
@@ -319,7 +320,10 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
         reasons: receipt.budgetDecision?.reasons ?? [],
       }
     })
+    const chapterNumber = run.binding.sourceManifest.chapterNumber
+      ?? (run.binding.sourceManifest.reviewRevisionContext as ReviewRevisionContext | undefined)?.source?.chapterNumber
     return { handle: handleOf(run), status: run.status as MainGenerationRunView['status'], operation: run.binding.sourceManifest.operation as string,
+      ...(typeof chapterNumber === 'number' ? { chapterNumber } : {}),
       ...(plotOutline ? { plotOutline } : {}),
       budgetDiagnostics,
       nonReplayable: run.binding.epoch !== deps.epoch || run.status !== 'running' || !!budget.blockedCode
@@ -337,6 +341,34 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     assertCurrent()
     const rows = deps.database.prepare('SELECT run_id FROM generation_runs ORDER BY created_at_ms DESC, rowid DESC').all() as { run_id: string }[]
     return rows.map(row => repository.get(row.run_id)).filter(run => run.binding.projectId === deps.projectId).map(viewOf)
+  }
+  const deleteFailedHistory = (handle: MainGenerationRunHandle) => {
+    assertCurrent()
+    const run = repository.get(handle.runId)
+    if (run.binding.projectId !== deps.projectId || !isDeepStrictEqual(handleOf(run), handle))
+      throw new Error('GENERATION_RUN_IDENTITY_MISMATCH')
+    const siblings = deps.database.prepare('SELECT run_id FROM generation_runs WHERE root_action_id=?').all(run.rootActionId) as { run_id: string }[]
+    if ([...pending.keys()].some(key => siblings.some(sibling => JSON.parse(key)[0] === sibling.run_id))
+      || repository.budget(run.rootActionId).attempts.some(attempt => ['reserved', 'dispatch-marked'].includes(attempt.status)))
+      throw new Error('GENERATION_HISTORY_DELETE_ACTIVE')
+    // Removing attempts must not reset the budget of another recoverable task in the same action.
+    for (const sibling of siblings) {
+      let unreadable = false
+      const saved = repository.get(sibling.run_id), operation = saved.binding.sourceManifest.operation
+      try {
+        readContext(handleOf(saved))
+        if (['review-chapter', 'refine-draft', 'refine-from-review'].includes(String(operation))) {
+          reviewRevisions.readRecovery(handleOf(saved), () => false, () => undefined)
+        } else if (operation === 'editor-inline') readEditorInlineRecovery(handleOf(saved))
+      } catch { unreadable = true }
+      if (!unreadable) throw new Error('GENERATION_HISTORY_DELETE_READABLE')
+    }
+    const attempts = deps.database.prepare('SELECT attempt_id FROM generation_attempts WHERE run_id=?').all(run.runId) as { attempt_id: string }[]
+    deleteGenerationHistory(deps.database, run.runId, run.rootActionId)
+    service.forgetDeletedAttempts(attempts.map(attempt => attempt.attempt_id))
+    for (const attempt of attempts) volatileReceipts.delete(attempt.attempt_id)
+    runLeases.delete(run.runId)
+    return { deletedRunId: run.runId }
   }
   // S10B：'materialDecision'/'materialDecisionHash' 只在**取得准入之后**才可能出现在真正
   // 运行的 manifest 上（prepare 阶段早于材料装配），因此与 selectedFinalizedDraftIds 同类，
@@ -1432,7 +1464,7 @@ export function createMainGenerationOwner(deps: MainGenerationOwnerDependencies)
     readReviewRevisionRecovery: (handle: MainGenerationRunHandle) => reviewRevisions.readRecovery(handle,
       run => compareGenerationSourceBindings(run.binding, deps.rebuildBinding(run.binding, currentModelReceipt(run.binding))),
       run => viewOf(run).candidates?.at(-1)),
-    readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline,
+    readContext, readBatch, prepareDraftContext, preparedKnowledge, draftPreparationBinding, retryDraftShortOutline, deleteFailedHistory,
     beginBatch: (request: BeginGenerationBatchRequest) => {
       assertGenerationBatchIntent(request)
       const { mode, range, targetUnits, ...intent } = request

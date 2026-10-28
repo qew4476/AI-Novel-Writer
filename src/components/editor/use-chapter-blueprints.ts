@@ -490,12 +490,7 @@ export function useChapterBlueprints({
       return
     }
     const currentBlueprints = blueprintsRef.current
-    const authoritativeBlueprintExists = currentBlueprints.some(
-      blueprint => blueprint.chapterNumber === nextWriteChapter,
-    )
-    const chapterNumber = authoritativeBlueprintExists
-      ? Math.max(nextWriteChapter, ...currentBlueprints.map(blueprint => blueprint.chapterNumber)) + 1
-      : nextWriteChapter
+    const chapterNumber = Math.max(0, ...currentBlueprints.map(blueprint => blueprint.chapterNumber)) + 1
     const newBlueprint: ChapterBlueprint = {
       chapterNumber,
       title: '',
@@ -510,12 +505,6 @@ export function useChapterBlueprints({
     }
     markChapterDirty([...currentBlueprints, newBlueprint], newBlueprint.chapterNumber)
     setSelectedChapter(newBlueprint.chapterNumber)
-    if (authoritativeBlueprintExists) {
-      toast.info(text(
-        `第 ${nextWriteChapter} 章蓝图已存在，已新增第 ${chapterNumber} 章；写作入口仍为第 ${nextWriteChapter} 章。`,
-        `The Chapter ${nextWriteChapter} blueprint already exists. Added Chapter ${chapterNumber}; the writing entry remains Chapter ${nextWriteChapter}.`,
-      ))
-    }
   }
 
   /** 删除指定的一章：章号在作者打开确认时就定下，确认期间重新加载或换选中都不改变删除目标。 */

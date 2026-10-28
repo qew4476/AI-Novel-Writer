@@ -103,6 +103,9 @@ afterEach(async () => {
   setActiveProjectSessionContext(null)
   for (const restore of restores) restore()
   vi.restoreAllMocks()
+  for (const key of Object.keys(localStorage)) {
+    if (key.startsWith('vela:ignored-recovery:')) localStorage.removeItem(key)
+  }
 })
 
 describe('运行侧页', () => {
@@ -273,7 +276,7 @@ describe('运行侧页', () => {
     const fallback = invoke.getMockImplementation()!
     invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
       if (channel === 'generation:list') return [
-        { handle: broken, status: 'completed', artifacts: [] },
+        { handle: broken, operation: 'review-chapter', chapterNumber: 2, status: 'completed', artifacts: [] },
         { handle: draft, operation: 'chapter-draft', status: 'failed', artifacts: [],
           unsavedTails: [{ attemptId: '请求', artifactId: '尾段', durableRevision: 0, text: '可恢复的正文', failureCode: 'STORAGE_FAILED' }] },
       ]
@@ -287,7 +290,65 @@ describe('运行侧页', () => {
     await render()
     await vi.waitFor(() => expect(host!.textContent).toContain('可恢复的正文'))
     expect(host!.textContent).toContain('部分任务暂时无法读取')
+    expect(host!.textContent).toContain('第2章 · 审稿 (旧记录):')
     expect(host!.textContent).not.toContain('GENERATION_POLICY_UNSUPPORTED')
+  })
+
+  it('逐笔删除旧任务：可取消、保留其他提醒与候选，重新打开后不再读取已删除任务', async () => {
+    candidates = [candidate()]
+    localStorage.setItem('vela:ignored-recovery:legacy', '["旧审稿"]')
+    const broken = { projectId: session.projectId, epoch: '旧会话', rootActionId: '旧根', runId: '旧审稿' }
+    const draft = { ...broken, rootActionId: '正文根', runId: '旧正文' }
+    const fallback = invoke.getMockImplementation()!
+    const deleted = new Set<string>()
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:delete-failed-history') {
+        const handle = args[0] as { runId: string }
+        deleted.add(handle.runId)
+        return { deletedRunId: handle.runId }
+      }
+      if (channel === 'generation:list') return [
+        { handle: broken, operation: 'review-chapter', chapterNumber: 2, status: 'paused', artifacts: [] },
+        { handle: draft, operation: 'chapter-draft', chapterNumber: 5, status: 'paused', artifacts: [] },
+      ].filter(view => !deleted.has(view.handle.runId))
+      if (channel === 'generation:read-context') {
+        const handle = (args[0] as { handle: { runId: string } }).handle
+        throw new Error(handle.runId === draft.runId ? 'GENERATION_DRAFT_RECEIPT_INVALID' : 'GENERATION_PLANNING_INTENT_INVALID')
+      }
+      return fallback(channel, ...args)
+    })
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('第2章 · 审稿 (旧审稿)'))
+    expect(localStorage.getItem('vela:ignored-recovery:legacy')).toBeNull()
+    expect(host!.textContent).toContain('第5章 · 写正文 (旧正文)')
+    expect(host!.textContent).toContain('这不代表当前正文丢失')
+    expect(host!.textContent).not.toContain('GENERATION_DRAFT_RECEIPT_INVALID')
+    await click('删除此旧任务…')
+    expect(host!.textContent).toContain('永久删除此任务的恢复记录和生成片段')
+    await click('取消')
+    expect(deleted.size).toBe(0)
+    expect(host!.textContent).toContain('第2章 · 审稿 (旧审稿)')
+    await click('删除此旧任务…')
+    await click('确认删除')
+    await vi.waitFor(() => expect(host!.textContent).not.toContain('第2章 · 审稿 (旧审稿)'))
+    expect(host!.textContent).toContain('第5章 · 写正文 (旧正文)')
+    expect(host!.textContent).toContain('部分任务暂时无法读取')
+
+    await act(async () => root!.unmount())
+    root = createRoot(host!)
+    invoke.mockClear()
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('第5章 · 写正文 (旧正文)'))
+    expect(host!.textContent).not.toContain('第2章 · 审稿 (旧审稿)')
+    const reads = invoke.mock.calls.filter(([channel]) => channel === 'generation:read-context')
+    expect(reads).toHaveLength(1)
+    expect(reads[0][1]).toEqual({ handle: draft })
+    await click('删除此旧任务…')
+    await click('确认删除')
+    await vi.waitFor(() => expect(host!.textContent).not.toContain('部分任务暂时无法读取'))
+    expect(host!.textContent).toContain('潮水退去，钟声早了一刻。')
+    expect(deleted).toEqual(new Set(['旧审稿', '旧正文']))
+    expect(invoke.mock.calls.some(([channel]) => /commit|discard|resolve|cancel/.test(channel))).toBe(false)
   })
 
   it('恢复运行进行中：复制尾段仍可用且不清掉部分任务读取失败的提醒，恢复按钮不被锁住', async () => {

@@ -161,6 +161,25 @@ async function frozenAggregateRun(f: ReturnType<typeof fixture>, selection: Begi
   return f.owner.resume(run.handle)
 }
 
+describe('historical generation list metadata', () => {
+  it.each([{}, { source: null }])('keeps other runs readable when a review context has no source: %j', context => {
+    const f = fixture()
+    const legacy = f.owner.begin(f.begin)
+    const healthy = f.owner.begin({ ...f.begin, uiActionNonce: 'healthy-history' })
+    f.db.prepare(`UPDATE generation_runs SET binding_json=json_set(
+      json_remove(binding_json,'$.sourceManifest.chapterNumber'),
+      '$.sourceManifest.operation','review-chapter',
+      '$.sourceManifest.reviewRevisionContext',json(?)) WHERE run_id=?`)
+      .run(JSON.stringify(context), legacy.handle.runId)
+
+    const views = f.owner.list()
+    expect(views).toHaveLength(2)
+    expect(views.find(view => view.handle.runId === legacy.handle.runId)).toMatchObject({ operation: 'review-chapter' })
+    expect(views.find(view => view.handle.runId === legacy.handle.runId)?.chapterNumber).toBeUndefined()
+    expect(views.find(view => view.handle.runId === healthy.handle.runId)?.chapterNumber).toBe(1)
+  })
+})
+
 describe('chapter outline main authority', () => {
   it.each(['zero-attempt', 'unknown-attempt'] as const)('saves author recovery after %s and freezes the old run without changing its six binding fields or liabilities', async mode => {
     const dispatch = vi.fn<GenerationRunServiceDependencies['dispatch']>(async () => ({ finishReason: null, usage: null }))
@@ -2601,6 +2620,24 @@ describe('main draft persistence and batch lineage', () => {
     expect(() => reopened.readContext(generated.run.handle)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(() => reopened.commitDraft(generated.request)).toThrow('GENERATION_DRAFT_RECEIPT_INVALID')
     expect(f.dispatch).toHaveBeenCalledTimes(1)
+  })
+  it('deletes an unreadable generation and its fragments while keeping the saved draft and independent tasks', async () => {
+    const f = drafting(), generated = await generate(f, { ...f.begin, authorInputs })
+    const saved = f.owner.commitDraft(generated.request)
+    f.db.prepare('UPDATE drafts SET version=version+1 WHERE id=?').run(saved.id)
+    const originalDraft = DraftRepository.getFull(saved.id)
+    const independent = f.owner.begin({ ...f.begin, authorInputs, uiActionNonce: 'independent-history' })
+    const reopened = f.reopen()
+    expect(() => reopened.deleteFailedHistory({ ...generated.run.handle, projectId: 'foreign' })).toThrow('GENERATION_RUN_IDENTITY_MISMATCH')
+    expect(() => reopened.deleteFailedHistory(independent.handle)).toThrow('GENERATION_HISTORY_DELETE_READABLE')
+    expect(reopened.deleteFailedHistory(generated.run.handle)).toEqual({ deletedRunId: generated.run.handle.runId })
+    expect(reopened.list().map(view => view.handle.runId)).toEqual([independent.handle.runId])
+    expect(DraftRepository.getFull(saved.id)).toEqual(originalDraft)
+    const activeDb = getProjectDb()!
+    for (const table of ['generation_runs', 'generation_attempts', 'generation_artifacts']) {
+      expect(activeDb.prepare(`SELECT COUNT(*) FROM ${table} WHERE run_id=?`).pluck().get(generated.run.handle.runId)).toBe(0)
+    }
+    expect(activeDb.prepare('SELECT 1 FROM generation_roots WHERE root_action_id=?').get(generated.run.handle.rootActionId)).toBeUndefined()
   })
   it.each([false, true])('reads an original v1 composition without changing its hash or saved draft: saved=%s', async savedBeforeReopen => {
     const refrain = '他又读了一遍石碑上的旧誓言，声音一字不差，像是在回答二十年前的自己：无论谁来到门前，我们都将为他留下一盏灯。'
