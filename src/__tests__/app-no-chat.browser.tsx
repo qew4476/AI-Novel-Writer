@@ -64,17 +64,19 @@ afterEach(async () => {
   delete window.aiNovelAPI
 })
 
-describe('应用里没有 AI 聊天', () => {
-  it.each<Locale>(['zh-CN', 'en-US'])('%s：作品里的界面与运行侧页都没有聊天入口', async locale => {
+describe('作品右侧显示 AI 聊天', () => {
+  it.each<Locale>(['zh-CN', 'en-US'])('%s：作品界面与运行侧页均保留聊天入口', async locale => {
     configLocale = locale
     useLocaleStore.setState({ locale })
     await act(async () => root.render(<App />))
     await vi.waitFor(() => expect(host.querySelector('.stage-shell')).not.toBeNull())
+    expect(host.querySelector('.stage-chat textarea')).not.toBeNull()
     await act(async () => navigate({ kind: 'run', facet: 'output' }))
     await vi.waitFor(() => expect(host.querySelector('.stage-sheet-slot')).not.toBeNull())
-    expect(host.textContent).not.toMatch(CHAT_WORDS)
+    expect(host.querySelector('.stage-chat textarea')).not.toBeNull()
+    expect(host.textContent).toMatch(CHAT_WORDS)
     expect([...host.querySelectorAll('[aria-label],[title],[placeholder]')]
-      .map(node => ['aria-label', 'title', 'placeholder'].map(name => node.getAttribute(name) ?? '').join(' ')).join(' ')).not.toMatch(CHAT_WORDS)
+      .map(node => ['aria-label', 'title', 'placeholder'].map(name => node.getAttribute(name) ?? '').join(' ')).join(' ')).toMatch(CHAT_WORDS)
   })
 
   it('启动时不连接 MCP 服务器', async () => {

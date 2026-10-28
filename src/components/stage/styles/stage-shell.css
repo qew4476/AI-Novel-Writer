@@ -19,6 +19,17 @@
   overflow: hidden;
 }
 
+.stage-chat {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 clamp(300px, 28vw, 420px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border-left: 1px solid var(--rule);
+  background: var(--surface);
+}
+
 /* 只重置外壳自己的按钮；纸墨按钮与内容区里旧按钮的字号、字重各由自己的样式决定 */
 :where(.stage-row, .stage-chapter, .stage-tab-label, .stage-tab-close, .stage-window-controls button) {
   font: inherit;

@@ -146,11 +146,12 @@ export default function AgentInputBox() {
   // 选择 @ 提及
   const handleMentionSelect = useCallback((target: MentionTarget) => {
     setShowMentionMenu(false)
-    // 替换最后一个 @ 及其后面的文字为 @displayName
+    // Names containing spaces use the stable token recognized by parseMentions.
     const lastAt = inputText.lastIndexOf('@')
     if (lastAt >= 0) {
       const before = inputText.slice(0, lastAt)
-      replaceInputText(`${before}@${target.displayName} `)
+      const token = /\s/.test(target.displayName) ? target.value : target.displayName
+      replaceInputText(`${before}@${token} `)
     }
     textareaRef.current?.focus()
   }, [inputText, replaceInputText])

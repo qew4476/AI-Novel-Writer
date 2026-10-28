@@ -14,6 +14,8 @@ import { readCharactersTool } from './read-characters.tool'
 import { readProjectStateTool } from './read-project-state.tool'
 import { readDraftsTool } from './read-drafts.tool'
 import { listChaptersTool } from './list-chapters.tool'
+import { readPlotTool } from './read-plot.tool'
+import { readManuscriptTool } from './read-manuscript.tool'
 import { writeFileTool } from './write-file.tool'
 import { openEditorTool } from './open-editor.tool'
 import { startWorkflowTool } from './start-workflow.tool'
@@ -34,6 +36,8 @@ export const builtinTools = [
   readProjectStateTool,
   readDraftsTool,
   listChaptersTool,
+  readPlotTool,
+  readManuscriptTool,
   inspectWritingSkillTool,
   // 行动 Tool（需确认）
   writeFileTool,

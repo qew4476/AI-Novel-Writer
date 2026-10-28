@@ -29,7 +29,7 @@ export interface SlashCommand {
 /** @ 提及目标 */
 export interface MentionTarget {
   /** 提及类型 */
-  type: 'chapter' | 'character' | 'architecture' | 'blueprint' | 'knowledge' | 'file'
+  type: 'chapter' | 'character' | 'architecture' | 'blueprint' | 'knowledge' | 'plot' | 'manuscript'
   /** 显示名称 */
   displayName: string
   /** 提及值（传递给 Tool） */
@@ -156,8 +156,9 @@ export function getAllMentionTargets(locale: Locale = 'zh-CN'): MentionTarget[] 
     { type: 'character', displayName: text('角色卡', 'Character cards'), value: 'characters' },
     { type: 'blueprint', displayName: text('章节蓝图', 'Chapter blueprints'), value: 'blueprints' },
     { type: 'knowledge', displayName: text('知识库', 'Knowledge base'), value: 'knowledge' },
+    { type: 'plot', displayName: text('剧情与伏笔', 'Plot & threads'), value: 'plot' },
     { type: 'chapter', displayName: text('当前章节', 'Current chapter'), value: 'current_chapter' },
-    { type: 'file', displayName: text('项目文件', 'Project file'), value: 'file' },
+    { type: 'manuscript', displayName: text('正文', 'Manuscript'), value: 'manuscript' },
   ]
 }
 
@@ -177,11 +178,11 @@ export function searchMentionTargets(query: string, locale: Locale = 'zh-CN'): M
  */
 export function parseMentions(input: string, locale: Locale = 'zh-CN'): ParsedMention[] {
   const mentions: ParsedMention[] = []
-  const regex = /@(\S+)/g
+  const regex = /@(正文|manuscript)(?![a-zA-Z_])|@(\S+)/g
   let match: RegExpExecArray | null = null
 
   while ((match = regex.exec(input)) !== null) {
-    const value = match[1]
+    const value = match[1] === '正文' ? 'manuscript' : match[1] ?? match[2]
     const target = getAllMentionTargets(locale).find(t =>
       t.value === value || t.displayName === value
     )
@@ -189,7 +190,7 @@ export function parseMentions(input: string, locale: Locale = 'zh-CN'): ParsedMe
       mentions.push({
         target,
         start: match.index,
-        end: match.index + match[0].length,
+        end: regex.lastIndex,
       })
     }
   }
@@ -205,7 +206,7 @@ export function mentionsToToolCalls(mentions: ParsedMention[]): Array<{
   toolName: string
   args: Record<string, unknown>
 }> {
-  return mentions.map(m => {
+  return mentions.flatMap(m => {
     switch (m.target.type) {
       case 'architecture':
         return { toolName: 'read_architecture', args: {} }
@@ -215,10 +216,14 @@ export function mentionsToToolCalls(mentions: ParsedMention[]): Array<{
         return { toolName: 'read_blueprint', args: {} }
       case 'knowledge':
         return { toolName: 'search_knowledge', args: { query: '' } }
+      case 'plot':
+        return { toolName: 'read_plot', args: {} }
+      case 'manuscript':
+        // The model resolves chapter expressions from the full user request.
+        return []
       case 'chapter':
-        return { toolName: 'list_chapters', args: {} }
-      case 'file':
-        return { toolName: 'read_file', args: { file_path: '' } }
+        // The current editor snapshot is attached by the caller, not a chapter list.
+        return []
       default:
         return { toolName: 'read_project_state', args: {} }
     }

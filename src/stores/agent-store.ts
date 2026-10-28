@@ -27,6 +27,7 @@ import { useLLMStore } from './llm-store'
 import { useEditorStore } from './editor-store'
 import type { Locale } from '../i18n/types'
 import { APP_BRAND } from '../shared/brand'
+import { currentChapterContext } from '../services/agent/current-chapter-context'
 
 export const AGENT_GENERATION_BUDGET = Object.freeze({
   maxAttempts: 8,
@@ -351,6 +352,7 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
     const executionContext = createAgentExecutionContext(modelId, requestLocale)
     const editor = useEditorStore.getState()
     const activeTab = editor.tabs.find(tab => tab.id === editor.activeTabId && tab.projectKey === executionContext.projectSession?.projectPath)
+    const chapterContext = currentChapterContext(activeTab, executionContext.projectSession, executionContext.writingLanguage)
     const editorContext = activeTab ? `${activeTab.name} (${activeTab.type}${activeTab.dirty ? ', unsaved' : ''})\n${(activeTab.content ?? '').slice(0, 500)}` : undefined
     const modelText = (zhCNText: string, enUSText: string) => writingLanguageText(
       executionContext.writingLanguage,
@@ -450,9 +452,18 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
       // ===== P1-5: @ 提及预取 =====
       let enrichedUserMessage = content.trim()
       const mentions = parseMentions(enrichedUserMessage, requestLocale)
+      if (!recoveryHandle && mentions.some(mention => mention.target.type === 'manuscript')) {
+        enrichedUserMessage += '\n\n' + modelText(
+          '[正文引用请求] 请根据用户原话判断要引用哪些章节，支持中文数字及自然表达，例如“第五章”对应 5，“5~7”或“第五到第七”对应 5-7，“第五章和第八章”对应 5,8。先调用 read_manuscript，将明确章号转换为 chapters 参数中的阿拉伯数字、范围或列表；拿到正文后再分析或回答。工具尚未读取任何正文，不可假装已读。若未指定章数、表达有歧义或只有不完整范围，请先询问用户，不要猜测章节。',
+          '[Manuscript reference request] Interpret the requested chapters from the user\'s own words, including Chinese numerals and natural expressions: chapter five means 5; 5~7 or five through seven means 5-7; chapters five and eight means 5,8. First call read_manuscript with resolved Arabic chapter numbers, ranges, or lists in the chapters argument, then analyze or answer using the returned text. No manuscript has been fetched yet; do not claim to have read it. If chapters are unspecified, ambiguous, or an incomplete range is given, ask the user rather than guessing.',
+        )
+      }
       if (!recoveryHandle && mentions.length > 0) {
         const prefetchCalls = mentionsToToolCalls(mentions)
         const prefetchResults: string[] = []
+        if (mentions.some(mention => mention.target.type === 'chapter')) {
+          prefetchResults.push(`[${modelText('预加载上下文', 'Prefetched context')} @current_chapter]\n${chapterContext}`)
+        }
         for (const call of prefetchCalls) {
           const tool = toolRegistry.get(call.toolName)
           if (tool) {
@@ -460,6 +471,8 @@ export const useAgentStore = create<AgentState>()((set, get) => ({
               const result = await tool.execute(call.args, executionContext)
               if (result.success && result.content) {
                 prefetchResults.push(`${modelText('[预加载上下文', '[Prefetched context')} @${call.toolName}]\n${result.content}`)
+              } else if (result.error) {
+                prefetchResults.push(`${modelText('[上下文读取失败', '[Context read failed')} @${call.toolName}]\n${result.error}`)
               }
             } catch {
               // 预取失败不阻塞主流程

@@ -58,6 +58,64 @@ describe('Agent GenerationRuntime boundary', () => {
     expect(lastMessage()?.mainGenerationHandle).toEqual(fixture.recovery.handle)
   })
 
+  it('sends the full current manuscript snapshot even if another tab opens during prefetch', async () => {
+    const content = '尚未保存的正文。'.repeat(200) + '末段。'
+    useEditorStore.setState({ activeTabId: 'chapter', tabs: [{
+      id: 'chapter', name: '第 2 章', type: 'chapter', chapterNumber: 2,
+      projectKey: session.projectPath, projectSessionLease: session.leaseId, content, dirty: true,
+    }] })
+    const lookup = vi.spyOn(toolRegistry, 'get').mockImplementation(name => name === 'read_architecture'
+      ? { name, description: '', source: 'builtin', inputSchema: { type: 'object', properties: {} },
+          isReadOnly: true, requiresConfirmation: false, execute: async () => {
+            useEditorStore.setState({ activeTabId: null, tabs: [] })
+            return { success: true, content: '架构' }
+          } } : undefined)
+    await useAgentStore.getState().sendMessage('请参考 @architecture @当前章节')
+    expect(calls('agent-generation:begin')).toHaveLength(1)
+    expect(fixture.recovery.context.input.userMessage).toContain(content)
+    expect(fixture.recovery.context.input.userMessage).toContain('包含尚未保存的修改')
+    expect(lookup).not.toHaveBeenCalledWith('list_chapters')
+  })
+
+  it.each(['5~7', '第五章', '第五到第七', '第五章和第八章'])('asks the model to resolve %s and read chapters before answering', async selection => {
+    const content = '正文'
+    const execute = vi.fn(async () => ({ success: true, content }))
+    vi.spyOn(toolRegistry, 'get').mockImplementation(name => name === 'read_manuscript'
+      ? { name, description: '', source: 'builtin', inputSchema: { type: 'object', properties: {} },
+          isReadOnly: true, requiresConfirmation: false, execute } : undefined)
+    await useAgentStore.getState().sendMessage(`请分析 @正文 ${selection}`)
+    expect(execute).not.toHaveBeenCalled()
+    const input = fixture.recovery.context.input.userMessage
+    expect(input).toContain(`请分析 @正文 ${selection}`)
+    expect(input).toContain('先调用 read_manuscript')
+    expect(input).toContain('工具尚未读取任何正文')
+  })
+
+  it('asks for clarification when a manuscript reference is unspecified', async () => {
+    vi.spyOn(toolRegistry, 'get').mockImplementation(name => name === 'read_manuscript'
+      ? { name, description: '', source: 'builtin', inputSchema: { type: 'object', properties: {} },
+          isReadOnly: true, requiresConfirmation: false,
+          execute: async () => ({ success: false, content: '', error: '请指定章号。' }) } : undefined)
+    await useAgentStore.getState().sendMessage('请分析 @正文')
+    expect(fixture.recovery.context.input.userMessage).toContain('请先询问用户，不要猜测章节')
+  })
+
+  it('executes model-resolved chapter arguments and returns manuscript text before the answer', async () => {
+    const execute = vi.fn(async () => ({ success: true, content: 'Chapter five manuscript text' }))
+    const tool = { name: 'read_manuscript', description: 'Read manuscript', source: 'builtin' as const,
+      inputSchema: { type: 'object' as const, properties: {} }, isReadOnly: true, requiresConfirmation: false, execute }
+    vi.spyOn(toolRegistry, 'listAll').mockReturnValue([tool])
+    vi.spyOn(toolRegistry, 'get').mockImplementation(name => name === tool.name ? tool : undefined)
+    fixture.response = async index => index === 0
+      ? '<tool_call>{"name":"read_manuscript","arguments":{"chapters":"5"}}</tool_call>'
+      : '根据第五章正文给出分析。'
+    await useAgentStore.getState().sendMessage('请分析 @正文 第五章')
+    expect(execute).toHaveBeenCalledWith({ chapters: '5' }, expect.objectContaining({ projectSession: session }))
+    expect(calls('agent-generation:finish-tool')[0][1]).toMatchObject({ observation: expect.stringContaining('Chapter five manuscript text') })
+    expect(calls('agent-generation:round')).toHaveLength(2)
+    expect(lastMessage()?.content).toContain('根据第五章正文给出分析')
+  })
+
   it('creates the default conversation and /help response entirely in the frozen English UI locale', async () => {
     useLocaleStore.setState({ locale: 'en-US', initialized: true })
     await useAgentStore.getState().sendMessage('/help')

@@ -8,8 +8,8 @@ import {
   BookOpen,
   ClipboardCheck,
   FileStack,
-  FileText,
   Map,
+  GitBranch,
   Users,
   type LucideIcon,
 } from 'lucide-react'
@@ -21,8 +21,9 @@ const mentionTargetIcons = {
   character: Users,
   blueprint: ClipboardCheck,
   knowledge: BookOpen,
+  plot: GitBranch,
   chapter: FileStack,
-  file: FileText,
+  manuscript: FileStack,
 } satisfies Record<MentionTarget['type'], LucideIcon>
 
 interface Props {
@@ -111,6 +112,9 @@ export default function MentionMenu({ query, onSelect, onClose, position }: Prop
               <TargetIcon size={14} strokeWidth={1.8} />
             </span>
             <span className="font-medium">{target.displayName}</span>
+            {target.type === 'manuscript' && <span style={{ color: 'var(--color-text-muted)' }}>
+              {text('第五章 / 5~7 / 第五到第七', 'Chapter five / 5~7')}
+            </span>}
           </button>
         )
       })}
