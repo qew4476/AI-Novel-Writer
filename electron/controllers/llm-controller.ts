@@ -10,9 +10,11 @@ import {
 import type { GlobalConfig, LLMFinishReason, LLMRequest, LLMResponse, ModelDiscoveryRequest, ModelProfile, TokenUsage } from '../../src/shared/ipc-channels'
 import { knownAppErrorMessage } from '../../src/i18n/app-errors'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import { isReasoningMapping } from '../../src/shared/reasoning-types'
+import { isReasoningMapping, reasoningAdapterFitsProtocol } from '../../src/shared/reasoning-types'
+import { isLocalModelEndpoint } from '../../src/shared/provider-presets'
+import { assignStageModel, availableGenerationModelId, isModelStage, parseStageModelIds, removeModelFromStages } from '../../src/shared/model-stage-routing'
 import { LLMFactory } from '../llm/llm-factory'
-import { getMainLocale, mainText } from '../i18n'
+import { getMainLocale, mainT, mainText } from '../i18n'
 import { resolveGenerationParameters } from '../llm/generation-parameter-policy'
 import { getCurrentProjectPath } from '../database'
 import { LLMHistoryRepository } from '../repositories/llm-repository'
@@ -31,6 +33,14 @@ interface ActiveStream {
 
 const activeStreams = new Map<string, ActiveStream>()
 const CONNECTION_TEST_MAX_TOKENS = 1024
+const LOCAL_CONNECTION_TEST_TIMEOUT_MS = 120_000
+const CLOUD_CONNECTION_TEST_TIMEOUT_MS = 30_000
+
+/** 本机模型冷启动要先把权重载入显存，常常超过 30 秒；云端卡住多是网络或代理问题，早点报出来。 */
+function connectionTestTimeoutMs(model: ModelProfile): number {
+  return isLocalModelEndpoint(model) ? LOCAL_CONNECTION_TEST_TIMEOUT_MS : CLOUD_CONNECTION_TEST_TIMEOUT_MS
+}
+
 const CLOSED_EXECUTION_LEASE_TOMBSTONE_TTL_MS = 5 * 60_000
 
 function loadModelConfigs(): ModelProfile[] {
@@ -343,7 +353,7 @@ export function registerLLMController() {
         model = { ...model, apiKey: '', protocol: 'openai', baseUrl: 'https://api.openai.com/v1' }
       }
       if (model.reasoningMapping !== undefined && (!isReasoningMapping(model.reasoningMapping)
-        || (model.protocol === 'gemini') !== (model.reasoningMapping.adapter === 'gemini-thinking-budget'))) {
+        || !reasoningAdapterFitsProtocol(model.protocol, model.reasoningMapping.adapter))) {
         throw new Error('INVALID_REASONING_MAPPING')
       }
       const models = loadModelConfigsForUpdate()
@@ -379,6 +389,11 @@ export function registerLLMController() {
         nextConfig.defaultEmbeddingModelId = null
         configChanged = true
       }
+      const stages = removeModelFromStages(parseStageModelIds(nextConfig.stageModelIds), modelId)
+      if (stages.changed) {
+        nextConfig.stageModelIds = stages.next
+        configChanged = true
+      }
 
       // 先清除引用，再删除被引用对象。若第二个文件写入失败，回滚配置；
       // 即使回滚也失败，配置中只会缺少默认值，不会悬空指向已删除模型。
@@ -400,9 +415,30 @@ export function registerLLMController() {
         success: true,
         defaultModelId: nextConfig.defaultModelId,
         defaultEmbeddingModelId: nextConfig.defaultEmbeddingModelId ?? null,
+        stageModelIds: parseStageModelIds(nextConfig.stageModelIds),
       }
     } catch (error) {
       return { success: false, error: String(error) }
+    }
+  })
+
+  ipcMain.handle('llm:get-stage-models', async () => {
+    const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
+    return parseStageModelIds(config.stageModelIds)
+  })
+
+  ipcMain.handle('llm:set-stage-model', async (_event, request: unknown) => {
+    try {
+      const { stage, modelId } = (request && typeof request === 'object' ? request : {}) as Record<string, unknown>
+      if (!isModelStage(stage) || (modelId !== null && typeof modelId !== 'string')) throw new Error('LLM_STAGE_MODEL_REQUEST_INVALID')
+      const assignedId = modelId === null ? null : availableGenerationModelId(loadModelConfigsForUpdate(), modelId)
+      if (modelId !== null && !assignedId) throw new Error('LLM_STAGE_MODEL_UNAVAILABLE')
+      const config = loadGlobalConfigForUpdate()
+      config.stageModelIds = assignStageModel(parseStageModelIds(config.stageModelIds), stage, assignedId)
+      writeJsonFile(GLOBAL_CONFIG_PATH, config)
+      return { success: true as const, stageModelIds: config.stageModelIds }
+    } catch (error) {
+      return { success: false as const, error: String(error) }
     }
   })
 
@@ -443,33 +479,44 @@ export function registerLLMController() {
     model: ModelProfile,
     creativeStrategy: LLMRequest['creativeStrategy'] = 'auto',
   ) => {
+    // 网络卡住时 undici 默认要等 300 秒才报 fetch failed；连接测试自己的截止时间会真正取消请求。
+    const timeoutMs = connectionTestTimeoutMs(model)
+    const deadline = new AbortController()
+    const timer = setTimeout(() => deadline.abort(), timeoutMs)
+    const timedOut = () => ({ success: false, error: mainT(app.getLocale(), 'error.connectionTestTimeout', { seconds: timeoutMs / 1000 }) })
     try {
       applyProxyConfig()
-      
+
       const messages = [{ role: 'user', content: 'Say "hello" and nothing else.' }]
       const provider = LLMFactory.getProvider(model)
-      
+
       let result = { success: true, error: undefined as undefined | string }
       if (model.purposes?.includes('embedding')) {
         const { generateEmbeddings } = await import('../embedding')
-        await generateEmbeddings(['hello'], model.protocol, model)
+        await generateEmbeddings(['hello'], model.protocol, model, undefined, undefined, deadline.signal)
       } else {
         const res = await provider.generate(
           model,
           messages,
-          resolveGenerationParameters(model, {
-            // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
-            maxTokens: CONNECTION_TEST_MAX_TOKENS,
-            reasoningStage: 'general',
-            creativeStrategy,
-          }),
+          {
+            ...resolveGenerationParameters(model, {
+              // 推理模型可能先消耗 reasoning tokens；预算过小会把可用连接误判为截断失败。
+              maxTokens: CONNECTION_TEST_MAX_TOKENS,
+              reasoningStage: 'general',
+              creativeStrategy,
+            }),
+            signal: deadline.signal,
+          },
         )
+        if (deadline.signal.aborted) return timedOut()
         result = res.success ? { success: true, error: undefined } : { success: false, error: providerConnectionFailure(res) }
       }
-      
+
       return { success: result.success, error: result.error }
     } catch (error) {
-      return { success: false, error: connectionTestFailure(error) }
+      return deadline.signal.aborted ? timedOut() : { success: false, error: connectionTestFailure(error) }
+    } finally {
+      clearTimeout(timer)
     }
   })
 

@@ -1,10 +1,12 @@
-import { app, ipcMain, dialog } from 'electron'
+import { app, ipcMain } from 'electron'
+import { showOpenDialogInLastDirectory } from '../utils/remembered-dialog'
 import type { IpcMainInvokeEvent } from 'electron'
 import path from 'node:path'
 import { readJsonFile, GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG, MODELS_CONFIG_PATH } from '../utils/config-utils'
 import { GlobalConfig, ModelProfile } from '../../src/shared/ipc-channels'
 import { isProjectSessionContext } from '../../src/shared/project-session-context'
-import type { EmbeddingOptions } from '../../src/shared/embedding-options'
+import { hasRequiredApiKey } from '../../src/shared/provider-presets'
+import type { EmbeddingModel } from '../../src/shared/embedding-options'
 import type { ImportRunExecutionAuthority } from '../../src/shared/import-run'
 import { knowledgeBaseLoader } from '../services/knowledge-base-loader'
 import { mainText } from '../i18n'
@@ -167,7 +169,9 @@ function isLegacyMigrationBlockedResult(value: unknown): boolean {
     && (value as { errorCode?: unknown }).errorCode === LEGACY_VECTOR_MIGRATION_BLOCKED
 }
 
-export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { baseUrl: string; apiKey: string; modelName: string; embeddingOptions?: EmbeddingOptions } } | null {
+const UNCONFIGURED_EMBEDDING_MODEL: EmbeddingModel = { provider: '', baseUrl: '', apiKey: '' }
+
+export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: EmbeddingModel & { modelName: string } } | null {
   const config = readJsonFile<GlobalConfig>(GLOBAL_CONFIG_PATH, DEFAULT_GLOBAL_CONFIG)
   const targetModelId = config.defaultEmbeddingModelId || config.defaultModelId
   if (!targetModelId) return null
@@ -177,14 +181,15 @@ export function getEmbeddingConfig(): { protocol: 'openai' | 'gemini'; model: { 
   if (!model) return null
   return {
     protocol: model.protocol as 'openai' | 'gemini',
-    model: { baseUrl: model.baseUrl, apiKey: model.apiKey, modelName: model.modelName, embeddingOptions: model.embeddingOptions },
+    // models.json 只经过宽松的迁移校验，旧档案可能缺这几个字段。
+    model: { provider: model.provider ?? '', baseUrl: model.baseUrl ?? '', apiKey: model.apiKey ?? '', modelName: model.modelName, embeddingOptions: model.embeddingOptions },
   }
 }
 
 function hasUsableEmbeddingConfig(
   config: ReturnType<typeof getEmbeddingConfig>,
 ): config is NonNullable<ReturnType<typeof getEmbeddingConfig>> {
-  return !!config && !!config.model.baseUrl.trim() && !!config.model.apiKey.trim()
+  return !!config && !!config.model.baseUrl.trim() && hasRequiredApiKey(config.model)
 }
 
 function requireProjectPath(expectedProjectPath: string): string {
@@ -245,7 +250,7 @@ export function registerKBController(
     }
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run((kb) => kb.importText(
       importedFile.content,
       importedFile.fileName,
@@ -278,7 +283,7 @@ export function registerKBController(
     }
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run(async (kb) => {
       const failedFiles: string[] = []
       let importedCount = 0
@@ -304,7 +309,7 @@ export function registerKBController(
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run((kb) => kb.importText(text, fileName, projectPath, protocol, model))
   })
 
@@ -312,7 +317,7 @@ export function registerKBController(
     const projectPath = requireProjectPath(expectedProjectPath)
     const embConfig = getEmbeddingConfig()
     const protocol = embConfig?.protocol ?? 'openai'
-    const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+    const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
     return knowledgeBaseLoader.run((kb) => kb.importText(
       text,
       fileName,
@@ -336,7 +341,7 @@ export function registerKBController(
       const fileName = referenceImportDisplayName(binding)
       const embConfig = getEmbeddingConfig()
       const protocol = embConfig?.protocol ?? 'openai'
-      const model = embConfig?.model ?? { baseUrl: '', apiKey: '' }
+      const model = embConfig?.model ?? UNCONFIGURED_EMBEDDING_MODEL
       return await knowledgeBaseLoader.run(async (kb) => {
         const result = await kb.importReferenceText(
           binding.content,
@@ -509,7 +514,7 @@ export function registerKBController(
   })
 
   ipcMain.handle('dialog:select-knowledge-files', async (event) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('knowledge-files', {
       properties: ['openFile', 'multiSelections'],
       title: text('选择要导入的文档', 'Choose documents to import'),
       filters: [{ name: text('文本文件', 'Text files'), extensions: ['txt', 'md', 'markdown'] }],
@@ -529,7 +534,7 @@ export function registerKBController(
   })
 
   ipcMain.handle('dialog:select-knowledge-folder', async (event) => {
-    const result = await dialog.showOpenDialog({
+    const result = await showOpenDialogInLastDirectory('knowledge-folder', {
       properties: ['openDirectory'],
       title: text('选择要批量导入的文件夹', 'Choose a folder to import'),
     })

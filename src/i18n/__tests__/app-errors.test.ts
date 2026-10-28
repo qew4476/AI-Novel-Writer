@@ -32,11 +32,13 @@ describe('generation error codes from the main process', () => {
     ["Error invoking remote method 'review-revision:prepare': Error: GENERATION_REVIEW_LINEAGE_UNPROVEN", '重新审稿'],
     ["Error invoking remote method 'character-proposal:list-pending-finalized': Error: GENERATION_PROJECT_SESSION_STALE", '重新打开'],
     ['Error: GENERATION_REQUEST_FAILED', '重试'],
+    ["Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_SOURCE_CONFLICT", '当前状态'],
+    ["Error invoking remote method 'finalization-generation:commit': Error: FINALIZED_CHARACTER_FIELD_CONFLICT", '生成期间'],
   ])('turns %s into a full sentence without the IPC wrapper', (raw, hint) => {
     for (const error of [raw, new Error(raw)]) {
       const zh = knownAppErrorMessage('zh-CN', error)
       expect(zh).toContain(hint)
-      expect(zh).not.toMatch(/Error invoking|GENERATION_/u)
+      expect(zh).not.toMatch(/Error invoking|GENERATION_|FINALIZED_/u)
       expect(knownAppErrorMessage('en-US', error)).toMatch(/^[A-Z][^_]+\.$/u)
     }
   })
@@ -203,6 +205,8 @@ describe('model, model settings and MCP errors from the main process (#474 B6)',
     // llm-controller 的 catch 用 String(error) 交出 "Error: 码"。
     ['Error: LLM_GLOBAL_CONFIG_CORRUPT', 'model settings file is damaged', '模型设置文件已损坏'],
     ['Error: LLM_DEFAULT_MODEL_ROLLBACK_FAILED', 'model was not deleted', '模型没有删除'],
+    ['Error: LLM_STAGE_MODEL_UNAVAILABLE', 'no longer available for writing', '不能用于文本生成'],
+    ['Error: LLM_STAGE_MODEL_REQUEST_INVALID', 'stage setting was not saved', '分工设置没有保存'],
     // 执行租约的码由 ModelExecutionLeaseError 抛出，带自己的类名。
     ['ModelExecutionLeaseError: MODEL_ENDPOINT_INVALID', 'Base URL is invalid', 'Base URL 无效'],
     ['GENERATION_KIMI_TEMPERATURE_INVALID', 'temperature from 0 to 1', '温度必须在 0 到 1 之间'],

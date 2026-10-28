@@ -47,7 +47,7 @@ describe('选区工具条', () => {
     const bar = toolbar()!
     expect([bar.classList.contains('paper-ink'), bar.dataset.theme]).toEqual([true, 'dark'])
     expect([...bar.querySelectorAll('button')].map(button => [button.textContent, button.classList.contains('pi-btn')]))
-      .toEqual([['用 Skill 修改', true], ['润色', true], ['扩写', true], ['续写', true], ['改成对话', true]])
+      .toEqual([['用 Skill 修改', true], ['润色', true], ['扩写', true], ['续写', true], ['改成对话', true], ['按意见改', true]])
     expect(getComputedStyle(bar).backgroundColor).toBe('rgb(24, 24, 28)')
   })
 

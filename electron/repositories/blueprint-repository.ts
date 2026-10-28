@@ -20,14 +20,14 @@ import type { BlueprintNewCharacterCandidate } from '../../src/shared/blueprint-
 export interface BlueprintRow {
     chapter_number: number
     title: string
-    role: string
-    purpose: string
-    key_events: string
-    characters: string
-    suspense_hook: string
-    user_guidance: string
-    notes: string
-    notes_updated_at: string
+    role: string | null
+    purpose: string | null
+    key_events: string | null
+    characters: string | null
+    suspense_hook: string | null
+    user_guidance: string | null
+    notes: string | null
+    notes_updated_at: string | null
     created_at: string
     updated_at: string
 }
@@ -145,20 +145,23 @@ interface CharacterRosterOperationEvidenceRow {
 
 const SHA256_HEX = /^[a-f0-9]{64}$/u
 
+function parseCharacters(raw: string | null): string[] {
+    if (raw === null) return []
+    try { return JSON.parse(raw) } catch { return [] }
+}
+
 function rowToData(row: BlueprintRow): BlueprintData {
-    let chars: string[] = []
-    try { chars = JSON.parse(row.characters) } catch { /* 容错 */ }
     return {
         chapterNumber: row.chapter_number,
         title: row.title,
-        role: row.role,
-        purpose: row.purpose,
-        keyEvents: row.key_events,
-        characters: chars,
-        suspenseHook: row.suspense_hook,
-        userGuidance: row.user_guidance,
-        notes: row.notes,
-        notesUpdatedAt: row.notes_updated_at,
+        role: row.role ?? '',
+        purpose: row.purpose ?? '',
+        keyEvents: row.key_events ?? '',
+        characters: parseCharacters(row.characters),
+        suspenseHook: row.suspense_hook ?? '',
+        userGuidance: row.user_guidance ?? '',
+        notes: row.notes ?? '',
+        notesUpdatedAt: row.notes_updated_at ?? '',
     }
 }
 
@@ -448,6 +451,19 @@ function snapshotWithCharacterSyncFacts(
     })
 }
 
+const AUTHOR_FIELD_GROUPS = [
+    { content: 'userGuidance', companions: [] },
+    { content: 'notes', companions: ['notesUpdatedAt'] },
+] as const
+
+function withExistingAuthorFields(blueprint: BlueprintData, existing: BlueprintData | undefined): BlueprintData {
+    const authorFields = AUTHOR_FIELD_GROUPS.flatMap(({ content, companions }) => {
+        const source = blueprint[content] ? blueprint : existing
+        return [content, ...companions].map(key => [key, source?.[key] || ''] as const)
+    })
+    return { ...blueprint, ...Object.fromEntries(authorFields) }
+}
+
 function samePersistedBlueprint(left: BlueprintData, right: BlueprintData): boolean {
     return left.chapterNumber === right.chapterNumber
         && left.title === right.title
@@ -628,14 +644,20 @@ export class BlueprintRepository {
                     'DELETE FROM blueprints WHERE chapter_number < ? OR chapter_number > ?',
                 ).run(request.startChapter, request.endChapter)
             }
-            for (const blueprint of request.blueprints) {
+            const existingByChapter = new Map((db.prepare(
+                'SELECT * FROM blueprints WHERE chapter_number BETWEEN ? AND ?',
+            ).all(request.startChapter, request.endChapter) as BlueprintRow[]).map(row => [row.chapter_number, rowToData(row)] as const))
+            const blueprints = request.blueprints.map(blueprint => (
+                withExistingAuthorFields(blueprint, existingByChapter.get(blueprint.chapterNumber))
+            ))
+            for (const blueprint of blueprints) {
                 BlueprintRepository.upsert(blueprint, db)
             }
 
             const persisted = readExactRange(db, request)
 
             const expectedByChapter = new Map(
-                request.blueprints.map(blueprint => [blueprint.chapterNumber, blueprint] as const),
+                blueprints.map(blueprint => [blueprint.chapterNumber, blueprint] as const),
             )
             for (const saved of persisted) {
                 const expected = expectedByChapter.get(saved.chapterNumber)
@@ -644,7 +666,7 @@ export class BlueprintRepository {
                 }
             }
 
-            const characterSyncInput = request.blueprints.map(blueprint => ({ ...blueprint }))
+            const characterSyncInput = blueprints
             db.prepare(`
               INSERT INTO blueprint_commit_operations (
                 operation_id, payload_hash, mode, start_chapter, end_chapter, character_sync_input

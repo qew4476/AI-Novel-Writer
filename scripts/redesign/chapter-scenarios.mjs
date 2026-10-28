@@ -464,6 +464,85 @@ export const CHAPTER_SCENARIOS = {
     return after
   } },
 
+  /**
+   * #484：合并后自动复验的结果在运行侧页的恢复卡里显示结论、条数与要点，不显示原始 JSON；
+   * 中文截 chapter-recheck-digest-zh，再切到英文重开作品，英文卡片写「1 item」与待核实。
+   */
+  'chapter-recheck-digest': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { page, fake, invoke, reload, shoot } = context
+    const summary = '复验：铺垫已压缩，仍需作者核对。'
+    // 审稿同 x2-recheck：带正文证据的本章目标意见才进复验。
+    const firstReview = JSON.stringify({ summary: '本章目标还没落地。', items: [
+      { category: '连续性', severity: 'warning', description: '核对钟声提前一刻与潮位的关系。', quote: '他给林岚倒了一杯很淡的茶' },
+    ], goalReviews: [{ id: 'ch4:keyEvents:1', status: 'unmet', description: '林岚还没有在灯塔里找到新的线索。',
+      evidence: [{ quote: '守塔人的屋子在灯塔背风的一侧' }] }] })
+    fake.replyReview(prompt => {
+      // 复验提示里也带着确认的修稿清单，要先按复核锚点认出它。
+      const anchors = prompt.split('【需复核的原始证据锚点】')[1]
+      if (!anchors) return prompt.includes('goalReviews') && !prompt.includes('【已确认纳入本次修稿的审稿项】') ? firstReview : null
+      const findings = JSON.parse(anchors.slice(anchors.indexOf('['), anchors.indexOf(']\n\n') + 1))
+      // 证据取自修稿新增的那句，在合并后正文里只出现一次，复验按可定位的证据处理。
+      return JSON.stringify({ summary, items: findings.map(({ findingId, targetId }) => ({
+        findingId, targetId, resolved: true, evidenceQuote: '又核对了一遍潮位表', reason: '第二段铺垫已压缩到两句。',
+      })) })
+    })
+    await chapterView.open(page, 4)
+    await reviewAndRevise(page)
+    await chapterView.merge(page).getByRole('button', { name: '全部用修稿' }).click()
+    await chapterView.merge(page).getByRole('button', { name: '完成合并' }).click()
+    await chapterView.view(page).getByRole('button', { name: '定稿', exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+    const deadline = Date.now() + 60_000
+    while (!fake.chats.some(chat => JSON.stringify(chat.messages).includes('需复核的原始证据锚点'))) {
+      assert.ok(Date.now() < deadline, `60 秒内没有发出合并后的复验（对话请求 ${fake.chats.map(chat => chat.kind).join('、')}）`)
+      await page.waitForTimeout(250)
+    }
+    await waitRunDone(page)
+    await runSheet.openFromPalette(page)
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: '复核未能确认全部意见已解决' })
+    await card.waitFor({ state: 'visible' })
+    const zh = { rawJson: await card.getByText('"summary"').count(), modelSummary: await card.getByText(summary).count(), count: await card.getByText(/（1 条意见）/).count(),
+      pending: await card.getByText(/待核实/).count() }
+    assert.deepEqual(zh, { rawJson: 0, modelSummary: 0, count: 1, pending: 1 }, '中文恢复卡显示复验摘要，模型判为已解决的写待核实')
+    await card.scrollIntoViewIfNeeded()
+    await shoot('chapter-recheck-digest-zh')
+
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, STAGE_SAMPLE.name)
+    await page.getByRole('navigation', { name: 'Writing flow' }).waitFor({ state: 'visible' })
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog', { name: 'Search and jump' }).getByRole('combobox').fill('Run sheet')
+    await page.keyboard.press('Enter')
+    await runSheet.waitUntilOpen(page)
+    const cardEn = runSheet.recovery(page).getByRole('article').filter({ hasText: 'The recheck could not confirm that every note is resolved' })
+    await cardEn.waitFor({ state: 'visible' })
+    await cardEn.scrollIntoViewIfNeeded()
+    const en = { rawJson: await cardEn.getByText('"summary"').count(), item: await cardEn.getByText(/\(1 item\)/).count(),
+      pending: await cardEn.getByText(/Needs verification/).count() }
+    assert.deepEqual(en, { rawJson: 0, item: 1, pending: 1 }, '英文恢复卡显示英文复验摘要')
+    return { zh, en }
+  } },
+
+  /** #484：只请求了一次的审稿候选，英文运行侧页写「1 request used」，不写成复数。 */
+  'run-usage-en': { model: true, shell: 'stage', setup: seed(), run: async context => {
+    const { page, invoke, reload } = context
+    await rereviewChapter3(context)
+    assert.equal((await invoke(page, 'config:set', { locale: 'en-US' })).success, true)
+    await reload()
+    await stage.openFromLibraryEn(page, STAGE_SAMPLE.name)
+    await page.getByRole('navigation', { name: 'Writing flow' }).waitFor({ state: 'visible' })
+    await page.keyboard.press('Control+K')
+    await page.getByRole('dialog', { name: 'Search and jump' }).getByRole('combobox').fill('Run sheet')
+    await page.keyboard.press('Enter')
+    await runSheet.waitUntilOpen(page)
+    const card = runSheet.recovery(page).getByRole('article').filter({ hasText: 'Chapter 3 review candidate' })
+    await card.waitFor({ state: 'visible' })
+    await card.scrollIntoViewIfNeeded()
+    const after = { single: await card.getByText('1 request used', { exact: true }).count(), plural: await card.getByText(/1 requests/).count() }
+    assert.deepEqual(after, { single: 1, plural: 0 }, '英文运行侧页的请求次数按单数写')
+    return after
+  } },
+
   /** lane 4：添加作者意见后修稿，修稿请求里带着这条意见。 */
   'chapter-manual': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake }) => {
     await chapterView.open(page, 4)
@@ -560,9 +639,7 @@ export const CHAPTER_SCENARIOS = {
     assert.equal(characterRequests(), 1, '自动后处理只发了一次角色状态请求')
     const firstError = await detail().innerText()
     await context.restart()
-    // 重启后可能直接回到作品，也可能停在书房：用一个组合定位等其一出现，不留下没人接的等待。
-    await stage.spine(context.page).or(stage.cover(context.page, STAGE_SAMPLE.name)).first().waitFor({ state: 'visible', timeout: 60_000 })
-    if (!await stage.spine(context.page).isVisible()) await stage.openFromLibrary(context.page, STAGE_SAMPLE.name)
+    await stage.openAfterRestart(context.page, STAGE_SAMPLE.name)
     await afterProjectOpenSettles(context.page)
     await chapterView.open(context.page, 3)
     await detail().waitFor({ state: 'visible', timeout: 60_000 })
@@ -590,7 +667,7 @@ export const CHAPTER_SCENARIOS = {
     await line.click({ clickCount: 3 })
     const toolbar = page.getByRole('toolbar', { name: '选中文字的操作' })
     await toolbar.waitFor({ state: 'visible' })
-    assert.deepEqual(await toolbar.getByRole('button').allInnerTexts(), ['润色', '扩写', '续写', '改成对话'])
+    assert.deepEqual(await toolbar.getByRole('button').allInnerTexts(), ['润色', '扩写', '续写', '改成对话', '按意见改'])
     await toolbar.getByRole('button', { name: '润色' }).click()
     await toolbar.getByText(firstLine(FIXTURE_PROSE)).waitFor({ state: 'visible', timeout: 30_000 })
     assert.equal(await toolbar.getByRole('button', { name: '替换' }).isEnabled(), true, '预览后可以替换')
@@ -605,6 +682,31 @@ export const CHAPTER_SCENARIOS = {
     assert.ok((await prose.innerText()).includes('你父亲也问过钟的事'), '取消后原文不变')
     await prose.getByText(firstLine(FIXTURE_PROSE)).first().click({ clickCount: 3 })
     await toolbar.waitFor({ state: 'visible' })
+  } },
+
+  'chapter-selection-note': { model: true, shell: 'stage', setup: seed(), run: async ({ page, fake, shoot }) => {
+    const note = '改成林岚的第一人称，语气更冷'
+    const revised = '我沿着旧港的石阶往下走。潮水退了，盐霜冷得像没人说出口的话。'
+    fake.replyReview(prompt => prompt.includes(note) ? revised : null)
+    await chapterView.open(page, 4)
+    const prose = chapterView.prose(page)
+    await prose.getByText(firstLine(STAGE_SAMPLE.drafts[4].text)).first().click({ clickCount: 3 })
+    const toolbar = page.getByRole('toolbar', { name: '选中文字的操作' })
+    await toolbar.getByRole('button', { name: '按意见改' }).waitFor({ state: 'visible' })
+    await page.waitForTimeout(200)
+    await shoot('chapter-selection-note-toolbar')
+    await toolbar.getByRole('button', { name: '按意见改' }).click()
+    const input = toolbar.getByRole('textbox', { name: '修改意见' })
+    await input.fill(note)
+    await shoot('chapter-selection-note-input')
+    await input.press('Control+Enter')
+    await toolbar.getByText(revised).waitFor({ state: 'visible', timeout: 30_000 })
+    assert.equal(await toolbar.getByText(note).isVisible(), true, '预览里显示作者意见')
+    await shoot('chapter-selection-note-preview')
+    await toolbar.getByRole('button', { name: '替换' }).click()
+    await prose.getByText(revised).first().waitFor({ state: 'visible' })
+    assert.ok(fake.chats.some(chat => JSON.stringify(chat.messages).includes(note)), '作者意见进入发给模型的请求')
+    return { note, revised }
   } },
 
   /** lane 9：第 4 章有两稿，删除当前这一稿要危险确认，之后版本切换器只剩另一稿。 */

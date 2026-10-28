@@ -55,12 +55,8 @@ it('connects, discovers and saves a ChatGPT subscription model without an API ke
     await act(async () => { await page.getByRole('button', { name: 'Continue with ChatGPT', exact: true }).click() })
     await expect.element(page.getByText('Connected to ChatGPT: test@example.invalid', { exact: true })).toBeVisible()
     await act(async () => { await page.getByRole('button', { name: 'Refresh model list', exact: true }).click() })
-    expect(discoverModels).toHaveBeenCalledWith({ provider: 'chatgpt-plan', protocol: 'openai', apiKey: '', baseUrl: 'https://api.openai.com/v1' })
-    const picker = container.querySelector('select[aria-label="Endpoint model list"]') as HTMLSelectElement
-    await act(async () => {
-      picker.value = 'account-model'
-      picker.dispatchEvent(new Event('change', { bubbles: true }))
-    })
+    expect(discoverModels).toHaveBeenCalledWith({ provider: 'chatgpt-plan', protocol: 'openai', apiKey: '', baseUrl: 'https://api.openai.com/v1', purposes: ['generation'] })
+    await act(async () => { await page.getByRole('option', { name: /account-model/ }).click() })
     await act(async () => { await page.getByRole('button', { name: 'Save configuration', exact: true }).click() })
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ provider: 'chatgpt-plan', modelName: 'account-model', apiKey: '' }))
     await act(async () => { await page.getByRole('button', { name: 'Disconnect ChatGPT', exact: true }).click() })

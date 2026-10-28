@@ -328,6 +328,31 @@ describe('运行侧页', () => {
     expect(button('继续此批次')?.disabled).toBe(false)
   })
 
+  it('继续选区运行遇上下文超长：说明一直留到下一次操作，不被之后的刷新清掉', async () => {
+    const editor = { projectId: session.projectId, epoch: '旧会话', rootActionId: '选区根', runId: '选区' }
+    const recovery = { view: { handle: editor, status: 'running', artifacts: [], candidates: [], ledger: { physicalRequests: 0 } }, modelId: '原模型', sourceStatus: 'current',
+      context: { action: 'refine', kind: 'author-draft', documentText: '原文', documentHash: 'a'.repeat(64), from: 0, to: 2, selectedText: '原文' } }
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'generation:list') return [{ handle: editor, status: 'running', artifacts: [] }]
+      if (channel === 'generation:read-context') return { handle: editor, operation: 'editor-inline' }
+      if (channel === 'editor-inline:read-recovery') return recovery
+      if (channel === 'editor-inline:execute') return { run: recovery.view, outcome: { status: 'incomplete', content: '', finishReason: 'error',
+        receipt: { finishReason: 'error', failureCode: 'GENERATION_CONTEXT_LENGTH_EXCEEDED' } } }
+      return fallback(channel, ...args)
+    })
+    await render()
+    const continueButton = await vi.waitFor(() => { const found = button('继续原选区任务'); expect(found).toBeTruthy(); return found! })
+    await act(async () => continueButton.click())
+    await vi.waitFor(() => expect(host!.textContent).toContain('提示词超出了模型能接受的长度'))
+    const lists = () => invoke.mock.calls.filter(([channel]) => channel === 'generation:list').length
+    const before = lists()
+    await act(async () => useWorkflowStore.setState({ history: [run('9', 'completed', { completedAt: '2026-10-12T09:00:00.000Z' })] }))
+    await vi.waitFor(() => expect(lists()).toBeGreaterThan(before))
+    await act(async () => {})
+    expect(host!.textContent).toContain('提示词超出了模型能接受的长度')
+  })
+
   it('审稿候选：卡片显示审稿结论与要点而不是原始 JSON，复制拿到原文', async () => {
     const reviewRun = { projectId: session.projectId, epoch: '旧会话', rootActionId: '审稿根', runId: '审稿' }
     const report = JSON.stringify({ summary: '时间线需要核对。', items: [
@@ -393,6 +418,39 @@ describe('运行侧页', () => {
     await click('放弃')
     await vi.waitFor(() => expect(host!.querySelector('[role="alert"]')?.textContent).toBe('候选放弃失败'))
     expect(host!.textContent).toContain('原始候选 · 第3章 雾钟')
+  })
+
+  it('恢复候选：放弃的结果回来前切到英文，失败提示用英文', async () => {
+    candidates = [candidate()]
+    let finish!: (value: unknown) => void
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:recovery-candidate-resolve'
+      ? new Promise(resolve => { finish = resolve })
+      : fallback(channel, ...args))
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('原始候选 · 第3章 雾钟'))
+    await click('放弃…')
+    await click('放弃')
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => finish({ success: false }))
+    await vi.waitFor(() => expect(host!.querySelector('[role="alert"]')?.textContent).toBe('Recovery candidate action failed'))
+  })
+
+  it('恢复候选：继续编辑的结果回来前切到英文，打开的标签用英文标题', async () => {
+    candidates = [candidate()]
+    let finish!: (value: unknown) => void
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => channel === 'db:recovery-candidate-update'
+      ? new Promise(resolve => { finish = resolve })
+      : fallback(channel, ...args))
+    const openFile = vi.fn()
+    useEditorStore.setState({ openFile })
+    await render()
+    await vi.waitFor(() => expect(host!.textContent).toContain('原始候选 · 第3章 雾钟'))
+    await click('继续编辑')
+    await act(async () => useLocaleStore.setState({ locale: 'en-US' }))
+    await act(async () => finish({ success: true, candidate: candidate() }))
+    expect(openFile).toHaveBeenCalledWith(expect.objectContaining({ name: 'Recovery candidate · Chapter 3 雾钟' }))
   })
 
   it('恢复候选：继续编辑的结果回来前换了作品，不在新作品里打开旧候选', async () => {

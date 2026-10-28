@@ -49,7 +49,8 @@ import {
   isGeneratedGlobalGuidanceValid,
   mergeExpandedNovelConfig,
 } from '../novel-config-expansion'
-import { displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, knownAppErrorMessage } from '../../../i18n/app-errors'
+import { pluralEn } from '../../../shared/plural-en'
 
 // --- 基础工具库 ---
 
@@ -1202,6 +1203,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
     context.data.characterDetailArtifacts = detailExecution.receipt.attempts.flatMap(receipt => receipt.visibleArtifact
       ? [{ ...receipt.visibleArtifact, purpose: receipt.purpose, finishReason: receipt.finishReason }] : [])
     if (!detailExecution.ok) {
+      if (detailExecution.failure.terminal) throw detailExecution.failure.terminal
       const diagnostic = detailExecution.failure.diagnostic
       const attempts = detailExecution.receipt.attempts.length > 0
         ? detailExecution.receipt.attempts
@@ -1218,7 +1220,7 @@ export class GenerateCharactersCommand extends BaseWorkflowCommand<string> {
       ].join(' ')
       throw new Error(text(
         `${displayedErrorMessage(context.uiLocale, detailExecution.failure.message)}；角色详情失败收据：${failureReceipt}`,
-        `Character details failed structural validation and were not saved. Receipt: ${failureReceipt}`,
+        `${knownAppErrorMessage(context.uiLocale, detailExecution.failure.message) ?? englishWithReason('Character details failed structural validation and were not saved.', displayedErrorMessage(context.uiLocale, detailExecution.failure.message))} Receipt: ${failureReceipt}`,
       ))
     }
     if (detailExecution.items.length !== manifest.length) {
@@ -1975,11 +1977,11 @@ export class GeneratePlotArchitectureCommand extends BaseWorkflowCommand<string>
       )
       callbacks.log(text(
         `已完成部分（约 ${partialBody.length} 字）已保存，可点击「继续生成情节大纲」从断点续写`,
-        `The completed part (about ${partialBody.length} characters) was saved. Click “Continue plot outline” to resume from the break point.`,
+        `The completed part (about ${partialBody.length} ${pluralEn(partialBody.length, 'character')}) was saved. Click “Continue plot outline” to resume from the break point.`,
       ))
       throw new PlotOutlineResumeAvailableError(text(
         `情节大纲生成在完成前中断：${displayedErrorMessage(context.uiLocale, cause)}。已完成部分（约 ${partialBody.length} 字）已自动保存为不完整状态，没有白费。\n点击「继续生成情节大纲」可续写本批（第 ${from}–${to} 章）；如本批范围仍偏大，可先在「AI 生成架构」缩小每批章节数后重试。`,
-        `Plot-outline generation stopped before completing this batch: ${displayedErrorMessage(context.uiLocale, cause)}. The finished part (about ${partialBody.length} characters) was saved automatically.\nClick “Continue plot outline” to finish batch chapters ${from}-${to}; if the batch is still too large, choose a smaller per-batch range in “Generate story architecture” and retry.`,
+        `Plot-outline generation stopped before completing this batch: ${displayedErrorMessage(context.uiLocale, cause)}. The finished part (about ${partialBody.length} ${pluralEn(partialBody.length, 'character')}) was saved automatically.\nClick “Continue plot outline” to finish batch chapters ${from}-${to}; if the batch is still too large, choose a smaller per-batch range in “Generate story architecture” and retry.`,
       ))
     }
 

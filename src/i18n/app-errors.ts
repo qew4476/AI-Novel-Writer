@@ -106,6 +106,7 @@ const ERROR_KEYS = {
   GENERATION_AGENT_CANCELLED: 'error.generationCancelled',
   GENERATION_PROVIDER_FAILED: 'error.generationProviderFailed',
   GENERATION_STREAM_INVALID: 'error.generationProviderFailed',
+  GENERATION_CONTEXT_LENGTH_EXCEEDED: 'error.generationContextLengthExceeded',
   GENERATION_FAILED: 'error.generationRequestFailed',
   GENERATION_AGENT_ACTION_LIMIT: 'error.generationRequestFailed',
   GENERATION_REVIEW_REPLACEMENT_LIMIT: 'error.generationRequestFailed',
@@ -157,6 +158,7 @@ const ERROR_KEYS = {
   ATTEMPT_BUDGET_EXHAUSTED: 'error.generationStopped',
   DEADLINE_EXHAUSTED: 'error.generationStopped',
   USAGE_EXCEEDED_RESERVATION: 'error.generationStopped',
+  // 只有这一个是旧版本在发送前按估算拒绝时留下的码（ADR-0023 后不再产生），旧运行记录读回时仍给出说明。
   TASK_BUDGET_CAPACITY_CONFLICT: 'error.generationInputTooLarge',
   TASK_BUDGET_SPLIT_REQUIRED: 'error.generationInputTooLarge',
   TASK_BUDGET_SCOPE_SPLIT_REQUIRED: 'error.generationInputTooLarge',
@@ -172,6 +174,10 @@ const ERROR_KEYS = {
   CHARACTER_AUTHOR_ROSTER_NOT_READY: 'error.characterRosterNotReady',
   FINALIZED_CHARACTER_STATE_CANDIDATE_NOT_FOUND: 'error.characterSuggestionGone',
   FINALIZED_CHARACTER_STATE_FIELD_CONFLICT: 'error.characterStateChanged',
+  // 定稿后处理提交角色状态时，字段已由更晚章节写过或来源对不上（#491）。
+  FINALIZED_CHARACTER_SOURCE_CONFLICT: 'error.characterStateSourceConflict',
+  // 定稿后处理提交角色状态时，字段在生成期间已被改动（#484）。
+  FINALIZED_CHARACTER_FIELD_CONFLICT: 'error.characterStateFieldConflict',
   FINALIZED_CHARACTER_STATE_OPERATION_CONFLICT: 'error.characterStateChanged',
   // 角色名单、蓝图与剧情资料（#474 B2）：作者在角色页手工编辑、生成或修复名单时能照着处理的拒绝原因。
   CHARACTER_ROSTER_NAME_REQUIRED: 'error.characterRosterNameRequired',
@@ -242,6 +248,8 @@ const ERROR_KEYS = {
   LLM_MODEL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
   LLM_GLOBAL_CONFIG_CORRUPT: 'error.modelSettingsFileDamaged',
   LLM_DEFAULT_MODEL_ROLLBACK_FAILED: 'error.defaultModelRollbackFailed',
+  LLM_STAGE_MODEL_UNAVAILABLE: 'error.stageModelUnavailable',
+  LLM_STAGE_MODEL_REQUEST_INVALID: 'error.stageModelRequestInvalid',
   MODEL_ENDPOINT_INVALID: 'error.modelEndpointInvalid',
   MODEL_OUTPUT_LIMIT_INVALID: 'error.modelOutputLimitInvalid',
   // 生成与连接测试都会按模型设置组请求参数，Kimi 官方接口的温度超出范围时在发请求前拒绝。
@@ -339,7 +347,12 @@ function displayedRaw(error: unknown): string {
   return error == null ? '' : String(error)
 }
 
+/** 文字里有没有汉字，含扩展区与兼容区；判断原因能否拼进英文句子都用它。 */
+export function containsHan(value: string): boolean {
+  return /\p{Script=Han}/u.test(value)
+}
+
 /** 英文句子后附上原因；原因里仍有汉字（主进程未登记的中文原文）时只给英文概述，不把中文拼进英文句子。 */
 export function englishWithReason(summary: string, reason: string, separator = ' '): string {
-  return !reason.trim() || /\p{Script=Han}/u.test(reason) ? summary : `${summary}${separator}${reason}`
+  return !reason.trim() || containsHan(reason) ? summary : `${summary}${separator}${reason}`
 }

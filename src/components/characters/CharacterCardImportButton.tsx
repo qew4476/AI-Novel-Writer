@@ -3,6 +3,7 @@ import { ClipboardPaste, FileUp } from 'lucide-react'
 import { useProjectStore } from '../../stores/project-store'
 import { useLocaleStore } from '../../stores/locale-store'
 import { useLLMStore } from '../../stores/llm-store'
+import { routeModelId } from '../../services/model-routing'
 import { navigate } from '../../stores/navigation/navigation-intents'
 import { useWorkflowStore, workflowResourceConflictMessage } from '../../stores/workflow-store'
 import { selectPlanningMaterials, type PlanningMaterial } from '../../services/knowledge-service'
@@ -92,7 +93,7 @@ function SessionImportButton({ session, disabled }: Props & { session: ProjectSe
         writeImportDraft(sessionKey, { source: draftWhenSelected.source, files: selected })
       }
     } catch (error) {
-      if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(locale, error))
+      if (isProjectSessionCurrent(session)) toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
     }
@@ -107,8 +108,8 @@ function SessionImportButton({ session, disabled }: Props & { session: ProjectSe
     const materials = [...submittedDraft.files]
     if (submittedDraft.source.trim()) materials.push({ fileName: text('粘贴的角色卡.txt', 'Pasted character cards.txt'), text: submittedDraft.source })
     if (!materials.length) return null
-    const llm = useLLMStore.getState()
-    const model = llm.models.find(candidate => candidate.id === llm.defaultModelId)
+    const modelId = routeModelId('planning-material-character-extraction')
+    const model = useLLMStore.getState().models.find(candidate => candidate.id === modelId)
     if (!model) {
       toast.warning(text('请先到设置 → 模型配置，添加并选择默认生成模型；输入内容已保留。', 'Add and select a default generation model in Settings → Models first. Your input has been kept.'))
       return null
@@ -159,7 +160,7 @@ function SessionImportButton({ session, disabled }: Props & { session: ProjectSe
     } catch (error) {
       if (isProjectSessionCurrent(session)) {
         setOpen(true)
-        toast.error(appErrorMessage(locale, error))
+        toast.error(appErrorMessage(useLocaleStore.getState().locale, error))
       }
     } finally {
       if (isProjectSessionCurrent(session)) setBusy(false)
