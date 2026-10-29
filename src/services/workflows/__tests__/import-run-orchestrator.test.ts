@@ -8,6 +8,7 @@ import type {
 } from '../../../shared/import-run'
 import { createImportRunChapterBatchCheckpointId } from '../../../shared/import-run'
 import type { FinalizedDraftImportReceipt } from '../../../shared/finalized-draft-import'
+import { importGenerationStopMessage } from '../../../i18n/app-errors'
 import {
   IMPORT_CHAPTER_PAGE_SIZE,
   IMPORT_KNOWLEDGE_BATCH_SIZE,
@@ -720,6 +721,92 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('refresh')
   })
 
+  it.each([
+    [true, 'global'],
+    [false, 'refresh'],
+  ] as const)('作者原稿冻结的反推选项为 %s 时，后处理之后进入 %s', async (authorInference, expectedStage) => {
+    const { deps, getRun } = harness(1, {
+      purpose: 'author-manuscript', authorInference, effectNamespace: 'import:author-manuscript:run-1',
+      stage: 'author-postprocess', completedBatches: { 'author-commit': ['done'], 'author-publish': ['chapter:1'] },
+    })
+    deps.getAuthorCommitReceipt = vi.fn(async () => ({
+      operationId: 'author-import:run-1', payloadHash: 'e'.repeat(64), chapterNumbers: [1], idempotent: false,
+      drafts: [{ chapterNumber: 1, draftId: 1, finalizationId: 'final-1', contentHash: 'f'.repeat(64),
+        targetFileName: 'Chapter 1.txt', status: 'finalized' as const, publicationStatus: 'pending' as const }],
+    }))
+    deps.postprocessAuthorChapter = vi.fn(async () => undefined)
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'author-postprocess', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(getRun().stage).toBe(expectedStage)
+  })
+
+  it('作者原稿只为没有蓝图的章调模型，按连续段分批，已有蓝图的章一章也不碰', async () => {
+    const { deps, getRun } = harness(9, { purpose: 'author-manuscript', authorInference: true, stage: 'blueprints' })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([3, 4, 9]))
+    const generated: number[][] = []
+    deps.inferBlueprints = vi.fn(async (chapters: ImportRunChapterSnapshot[], _batchId, _run, commit) => {
+      generated.push(chapters.map(item => item.number))
+      await commit({ blueprints: true })
+    })
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(generated).toEqual([[1, 2], [5, 6, 7, 8]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
+  it('作者原稿续跑时重放本次运行已提交的蓝图批次，不再调模型，也不把它们当成作者已有的蓝图跳过', async () => {
+    const committedBatch = [1, 2, 3, 4, 5].map(chapter)
+    const checkpoint = createImportRunChapterBatchCheckpointId(committedBatch)
+    const { deps, receipts, getRun } = harness(7, {
+      purpose: 'author-manuscript', authorInference: true, stage: 'blueprints', completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1, runId: 'run-1', effectNamespace: 'import:reference:run-1', effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints', batchId: checkpoint, kind: 'chapter-blueprint-range', payloadHash: 'f'.repeat(64),
+      state: 'committed', payload: { blueprints: true }, effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([1, 2, 3, 4, 5]))
+    const generated: number[][] = []
+    deps.inferBlueprints = vi.fn(async (chapters: ImportRunChapterSnapshot[], _batchId, _run, commit) => {
+      generated.push(chapters.map(item => item.number))
+      await commit({ blueprints: true })
+    })
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(deps.replayCommittedEffect).toHaveBeenCalledTimes(1)
+    expect(generated).toEqual([[6, 7]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
+  it('作者原稿续跑前作者删掉了中间一章的蓝图：已提交批次按原检查点重放，新批次只含没被覆盖的章', async () => {
+    const checkpoint = createImportRunChapterBatchCheckpointId([chapter(1)])
+    const { deps, receipts, getRun } = harness(3, {
+      purpose: 'author-manuscript', authorInference: true, stage: 'blueprints', completedBatches: { blueprints: [checkpoint] },
+    })
+    receipts.set(`blueprints:${checkpoint}`, {
+      schemaVersion: 1, runId: 'run-1', effectNamespace: 'import:reference:run-1', effectKey: `blueprints:${checkpoint}`,
+      stage: 'blueprints', batchId: checkpoint, kind: 'chapter-blueprint-range', payloadHash: 'f'.repeat(64),
+      state: 'committed', payload: { blueprints: true }, effectReceipt: { characterSyncOperation: { operationId: 'sync-1' } },
+      createdAt: '2026-01-01', updatedAt: '2026-01-01',
+    })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([1]))
+    const generated: number[][] = []
+    deps.inferBlueprints = vi.fn(async (chapters: ImportRunChapterSnapshot[], _batchId, _run, commit) => {
+      generated.push(chapters.map(item => item.number))
+      await commit({ blueprints: true })
+    })
+
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+
+    expect(deps.replayCommittedEffect).toHaveBeenCalledTimes(1)
+    expect(generated).toEqual([[2, 3]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
   it('replays a checkpointed blueprint effect so pending character sync finishes without another model call', async () => {
     const firstBatch = Array.from({ length: 5 }, (_, index) => chapter(index + 1))
     const checkpoint = createImportRunChapterBatchCheckpointId(firstBatch)
@@ -867,6 +954,63 @@ describe('ImportRunOrchestrator failure copy follows the import run locale', () 
 
     expect((failure as Error).message).toContain('missing Chapter 2')
     expect((failure as Error).message).not.toMatch(han)
+    expect(getRun().lastError).toBe((failure as Error).message)
+  })
+
+  it.each([
+    ['zh-CN', 'blueprints', "Error invoking remote method 'generation:begin': Error: GENERATION_DIRECTORY_CONTINUATION_BLOCKED", 'GENERATION_DIRECTORY_CONTINUATION_BLOCKED'],
+    ['en-US', 'global', 'ROOT_BUDGET_EXHAUSTED', 'ROOT_BUDGET_EXHAUSTED'],
+  ] as const)('stores and throws the %s import stop explanation and logs the code for diagnostics when %s generation stops on %s', async (locale, stage, raw, code) => {
+    const { deps, getRun } = harness(5, { locale, stage })
+    deps.inferGlobal = vi.fn(async () => { throw new Error(raw) })
+    deps.inferBlueprints = vi.fn(async () => { throw new Error(raw) })
+    const log = vi.fn()
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', stage, 'test-runner', { cancelled: false }, { ...callbacks, log })
+      .catch((error: Error) => error)
+
+    expect((failure as Error).message).toBe(importGenerationStopMessage(locale, code))
+    expect((failure as Error).message).not.toContain(code)
+    expect(getRun()).toMatchObject({ status: 'failed', lastError: (failure as Error).message })
+    expect(log.mock.calls.flat().some(line => String(line).includes(code))).toBe(true)
+  })
+
+  it.each([
+    ['an unrelated provider failure', new Error('provider unavailable')],
+    ['a step explanation that carries a stop code', Object.assign(new Error('蓝图推演失败：活动时长用完（ROOT_BUDGET_EXHAUSTED）'), { code: 'ROOT_BUDGET_EXHAUSTED' })],
+  ])('keeps %s as it was', async (_case, thrown) => {
+    const { deps, getRun } = harness(1, { stage: 'global' })
+    deps.inferGlobal = vi.fn(async () => { throw thrown })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect(failure).toBe(thrown)
+    expect(getRun().lastError).toBe(thrown.message)
+  })
+
+  it('keeps a stop code raised outside the generation stages as it was', async () => {
+    const { deps, getRun } = harness(1, { stage: 'refresh' })
+    const thrown = new Error('GENERATION_STORAGE_FAILED')
+    deps.refresh = vi.fn(async () => { throw thrown })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'refresh', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect(failure).toBe(thrown)
+    expect(getRun().lastError).toBe(thrown.message)
+  })
+
+  it('gives an author-manuscript inference stop the author explanation instead of Start over', async () => {
+    const { deps, getRun } = harness(1, { purpose: 'author-manuscript', authorInference: true, stage: 'global', locale: 'zh-CN' })
+    deps.inferGlobal = vi.fn(async () => { throw new Error('ROOT_BUDGET_EXHAUSTED') })
+
+    const failure = await new ImportRunOrchestrator(deps)
+      .executeStage('run-1', 'global', 'test-runner', { cancelled: false }, callbacks)
+      .catch((error: Error) => error)
+    expect((failure as Error).message).toBe(importGenerationStopMessage('zh-CN', 'ROOT_BUDGET_EXHAUSTED', false, 'author-manuscript'))
+    expect((failure as Error).message).not.toContain('重新开始')
     expect(getRun().lastError).toBe((failure as Error).message)
   })
 

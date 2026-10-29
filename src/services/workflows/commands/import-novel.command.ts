@@ -1,4 +1,4 @@
-import { displayedErrorMessage, englishWithReason } from '../../../i18n/app-errors'
+import { displayedErrorMessage, englishWithReason, importGenerationStopMessage } from '../../../i18n/app-errors'
 import type { NovelConfig } from '../../../shared/ipc-channels'
 import type { ImportGenerationContext, ImportGenerationSlot } from '../../../shared/import-generation'
 import type { BeginGenerationRequest } from '../../../shared/generation-owner-contract'
@@ -15,6 +15,7 @@ import {
   BaseWorkflowCommand,
   injectWritingSkillIntoSession,
   type CommandExecuteParams,
+  type LLMCompletion,
   type WorkflowGenerationRuntimeDependencies,
 } from './base-command'
 import { useProjectStore } from '../../../stores/project-store'
@@ -76,6 +77,11 @@ export function importGenerationSelection(context: WorkflowContext, stage: Impor
   if (!slot) return undefined
   if (slot.stage !== stage || !context.data.importRunExecution) throw new Error('IMPORT_GENERATION_EXECUTION_REQUIRED')
   return { importSlot: slot, importExecution: context.data.importRunExecution as NonNullable<BeginGenerationRequest['importExecution']> }
+}
+
+/** 导入运行的用途：作者原稿反推停下时的说明与参考小说不同。 */
+function importRunPurpose(context: WorkflowContext): 'reference' | 'author-manuscript' {
+  return context.data.importRunPurpose === 'author-manuscript' ? 'author-manuscript' : 'reference'
 }
 
 export function frozenImportContext(context: WorkflowContext): ImportGenerationContext | undefined {
@@ -140,7 +146,9 @@ function requireImportGlobalFactsReceipt(
         || typeof candidate.characterProposal.sourceHash !== 'string'
         || !SHA256_HEX.test(candidate.characterProposal.sourceHash)
         || !deepJsonEqual(candidate.proposalSource, expected)
-        || !deepJsonEqual(candidate.core, expected.core)
+        || (candidate.mode === 'fill-empty'
+          ? !Array.isArray(candidate.suggestions)
+          : !deepJsonEqual(candidate.core, expected.core))
       : candidate.proposalSource !== undefined
         || !candidate.roster?.snapshot
         || candidate.roster.snapshot.status !== 'ready'
@@ -169,6 +177,22 @@ export class ImportBlueprintPostCommitSyncError extends Error {
   }
 }
 
+/**
+ * 导入的单次调用（global、style）在请求进行中用完活动时长或写入失败时，回执带 ROOT_BUDGET_EXHAUSTED 或 GENERATION_STORAGE_FAILED：
+ * 换成对应说明，码只进诊断日志。
+ */
+export function assertImportCompletionNotStopped(
+  completion: Pick<LLMCompletion, 'receipt'>,
+  callbacks: Pick<CommandExecuteParams['callbacks'], 'log'>,
+  context: CommandExecuteParams['context'],
+): void {
+  const code = completion.receipt.failureCode
+  const stopped = code && importGenerationStopMessage(context.uiLocale, code, true, importRunPurpose(context))
+  if (!stopped) return
+  callbacks.log(workflowUiText(context, `导入停止原因：${code}`, `Import stop reason: ${code}`))
+  throw new Error(stopped)
+}
+
 // =================================================================
 // 1. 向量采样 + AI 推演全局配置/架构/角色
 // =================================================================
@@ -177,6 +201,8 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
   constructor(
     generationDependencies?: WorkflowGenerationRuntimeDependencies,
     private readonly commitGlobalFacts?: (request: ImportGlobalFactsRequest) => Promise<ImportGlobalFactsReceipt>,
+    /** 作者原稿只从作者自己的正文取材，不混入项目里的参考小说。 */
+    private readonly excludeReferenceCorpus = false,
   ) {
     super(generationDependencies)
   }
@@ -260,6 +286,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context,
     )
+    assertImportCompletionNotStopped(correction, callbacks, context)
     if (correction.finishReason !== 'stop') throw this.createIncompleteCompletionError(correction.finishReason)
     return decodeImportInferenceWithEndpointDelta(rawResult, correction.content, text)
   }
@@ -318,7 +345,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       try {
         const results = unwrapKnowledgeValue(await ipc.invokeWithProjectSession(
           projectSession,
-          'kb:search',
+          this.excludeReferenceCorpus ? 'kb:search-writing-context' : 'kb:search',
           topic.query,
           5,
           context.projectPath,
@@ -400,6 +427,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       },
       context,
     )
+    assertImportCompletionNotStopped(initial, callbacks, context)
     if (initial.finishReason !== 'stop') throw this.createIncompleteCompletionError(initial.finishReason)
     let rawResult = initial.content
     if (isRepairableDirectJsonSyntaxFailure(rawResult)) {
@@ -425,6 +453,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         },
         context,
       )
+      assertImportCompletionNotStopped(repair, callbacks, context)
       if (repair.finishReason !== 'stop') throw this.createIncompleteCompletionError(repair.finishReason)
       if (!preservesStructuredJsonEvidence(rawResult, repair.content)) {
         throw new Error(text(
@@ -537,8 +566,7 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       '当前项目已切换，导入配置结果未应用',
       'The project changed, so the imported configuration was not applied.',
     ))
-    const authoritativeNovelConfig = {
-      ...baseConfig,
+    const savedFields = {
       genre: commitReceipt.core.genre,
       subGenre: commitReceipt.core.subGenre,
       targetAudience: commitReceipt.core.targetAudience,
@@ -552,7 +580,9 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
       worldSetting: commitReceipt.core.worldSetting,
       protagonistProfile: commitReceipt.core.protagonistProfile,
     }
-    useProjectStore.setState({ currentProject: { ...projectSnapshot, novelConfig: authoritativeNovelConfig } })
+    const authoritativeNovelConfig = { ...baseConfig, ...savedFields }
+    // 反推等待期间作者在设定页改过、还没保存的字段保持作者的值。
+    useProjectStore.getState().publishSavedNovelConfig(savedFields, projectSession, 'unsaved-edits')
     const unknown = promptLanguageText(writingLanguage, '未知', 'Unknown')
     const none = promptLanguageText(writingLanguage, '（无）', '(none)')
     context.data.novelConfigSummary = promptLanguageText(
@@ -568,7 +598,13 @@ export class InferGlobalSettingsCommand extends BaseWorkflowCommand<void> {
         + `Central advantage: ${authoritativeNovelConfig.goldenFinger || none}\n`
         + `Protagonist: ${authoritativeNovelConfig.protagonistProfile || none}`,
     )
-    if (commitReceipt.characterProposal) {
+    if (commitReceipt.mode === 'fill-empty') {
+      const suggestionCount = commitReceipt.suggestions?.length ?? 0
+      callbacks.log(text(
+        `空白的设定与架构已补齐，已有内容没有改动；${suggestionCount} 条与现有内容不同的反推结果放进了建议，导入完成后可以在这张运行卡片里采用。角色以提议形式保存，等你采用。`,
+        `Empty settings and architecture were filled; existing content was left unchanged. ${suggestionCount} inferred ${suggestionCount === 1 ? 'value differs' : 'values differ'} from what you wrote and ${suggestionCount === 1 ? 'is kept as a suggestion' : 'are kept as suggestions'} you can adopt on this run card once the import finishes. Characters are saved as proposals for you to adopt.`,
+      ))
+    } else if (commitReceipt.characterProposal) {
       const proposalCount = commitReceipt.proposalSource.characterEntries.length
       callbacks.log(text(
         `小说配置、非角色架构与 ${proposalCount} 条角色提议已原子保存；提议保留待采用，尚未创建角色。`,
@@ -743,9 +779,13 @@ export class InferBlueprintsPerChapterCommand extends BaseWorkflowCommand<void> 
     })
     if (!batch.ok) {
       if (batch.failure.terminal) throw batch.failure.terminal
+      const { errorCode } = batch.failure
+      if (errorCode) callbacks.log(text(`蓝图推演停止原因：${errorCode}`, `Blueprint inference stop reason: ${errorCode}`))
+      const reason = (errorCode && importGenerationStopMessage(context.uiLocale, errorCode, batch.failure.code === 'deadline', importRunPurpose(context)))
+        || displayedErrorMessage(context.uiLocale, batch.failure.message)
       throw new Error(text(
-        `蓝图推演失败：${displayedErrorMessage(context.uiLocale, batch.failure.message)}`,
-        englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, displayedErrorMessage(context.uiLocale, batch.failure.message)),
+        `蓝图推演失败：${reason}`,
+        englishWithReason(`Blueprint inference failed (${batch.failure.reason}).`, reason),
       ))
     }
 

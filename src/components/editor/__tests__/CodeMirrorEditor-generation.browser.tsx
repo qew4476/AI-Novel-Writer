@@ -29,6 +29,11 @@ let failureCode: string | undefined
 
 const APP_MIN_WINDOW_WIDTH = 1024
 const nextFrames = () => act(async () => { await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))) })
+/** 三击选中一行，等选区工具条出现。工具条在下一帧定位后才渲染，不能在 act 里等它：act 结束前 React 不提交渲染。 */
+const selectLine = async (text: string, options?: { exact: boolean }) => {
+  await act(async () => page.getByText(text, options).click({ clickCount: 3 }))
+  await expect.element(page.getByRole('toolbar', { name: '选中文字的操作' })).toBeVisible()
+}
 
 beforeEach(async () => {
   await page.viewport(APP_MIN_WINDOW_WIDTH, 768)
@@ -169,7 +174,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     })
     await act(async () => root.render(<CodeMirrorEditor content="原文段落" mode="prose" />))
 
-    await act(async () => page.getByText('原文段落').click({ clickCount: 3 }))
+    await selectLine('原文段落')
     await act(async () => page.getByRole('button', { name: '润色' }).click())
 
     await vi.waitFor(() => expect(invoke).toHaveBeenCalledWith('editor-inline:begin', expect.objectContaining({ modelId: 'stage-model' }), expect.any(Object)))
@@ -240,7 +245,7 @@ describe('CodeMirror editor AI generation boundary', () => {
       <CodeMirrorEditor content="林岚走进北塔" mode="prose" />,
     ))
 
-    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await selectLine('林岚走进北塔')
     await act(async () => page.getByRole('button', { name: '按意见改' }).click())
     const note = page.getByRole('textbox', { name: '修改意见' })
     await act(async () => note.fill('语气更冷'))
@@ -261,7 +266,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     expect(commandKeyLabel('Enter', false)).toBe('Ctrl + Enter')
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
 
-    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await selectLine('林岚走进北塔')
     await act(async () => page.getByRole('button', { name: '按意见改' }).click())
 
     await expect.element(page.getByText(`${IS_MAC ? '⌘' : 'Ctrl'} + Enter 提交`, { exact: true })).toBeVisible()
@@ -269,7 +274,7 @@ describe('CodeMirror editor AI generation boundary', () => {
 
   it('accepts a 2000 code point note outside the BMP in full', async () => {
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
-    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await selectLine('林岚走进北塔')
     await act(async () => page.getByRole('button', { name: '按意见改' }).click())
     const note = page.getByRole('textbox', { name: '修改意见' })
     const longNote = '𠀋'.repeat(2000)
@@ -281,18 +286,20 @@ describe('CodeMirror editor AI generation boundary', () => {
 
   it('keeps the note form inside the viewport for a selection at the top edge', async () => {
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
-    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await selectLine('林岚走进北塔')
     await act(async () => page.getByRole('button', { name: '按意见改' }).click())
 
     const note = page.getByRole('textbox', { name: '修改意见' })
     await expect.element(note).toBeVisible()
+    // 表单长高后在下一帧绘制前夹紧；量用户看到的那一帧，不量还没排版过的 DOM
+    await nextFrames()
     expect(note.element().getBoundingClientRect().top).toBeGreaterThanOrEqual(0)
   })
 
   it('keeps a finished preview inside the viewport from the first frame after it grows past the loading height', async () => {
     deferStream = true
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
-    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await selectLine('林岚走进北塔')
     await act(async () => page.getByRole('button', { name: '润色' }).click())
     await vi.waitFor(() => expect(listeners.has('llm:stream-done')).toBe(true))
 
@@ -352,7 +359,7 @@ describe('CodeMirror editor AI generation boundary', () => {
     await act(async () => root.render(
       <div data-testid="chapter-scroller" style={{ height: 300, overflow: 'auto' }}><CodeMirrorEditor content={LONG_CHAPTER} mode="prose" fitContent /></div>,
     ))
-    await act(async () => page.getByText('第1段原文', { exact: true }).click({ clickCount: 3 }))
+    await selectLine('第1段原文', { exact: true })
     await act(async () => page.getByRole('button', { name: '按意见改' }).click())
     const note = page.getByRole('textbox', { name: '修改意见' })
     await act(async () => note.fill('我的未提交意见'))
@@ -389,7 +396,7 @@ describe('CodeMirror editor AI generation boundary', () => {
 
   it('leaves Escape to the input method while it reports composition by keyCode 229', async () => {
     await act(async () => root.render(<CodeMirrorEditor content="林岚走进北塔" mode="prose" />))
-    await act(async () => page.getByText('林岚走进北塔').click({ clickCount: 3 }))
+    await selectLine('林岚走进北塔')
     await act(async () => page.getByRole('button', { name: '按意见改' }).click())
     const note = page.getByRole('textbox', { name: '修改意见' })
 
