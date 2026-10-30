@@ -64,11 +64,11 @@ function inferredBlueprint(number: number): BlueprintData {
   }
 }
 
-function prepareAuthorRun(authorInference: boolean): void {
+function prepareAuthorRun(authorInference: boolean) {
   const preview = FinalizedDraftImportRepository.preview(CHAPTERS.map(item => ({
     chapterNumber: item.number, title: item.title, content: item.content, wordCount: countDraftUnits(item.content),
   })))
-  ImportRunRepository.prepare({
+  return ImportRunRepository.prepare({
     runId: RUN_ID,
     purpose: 'author-manuscript',
     sourceFingerprint: 'd'.repeat(64),
@@ -178,11 +178,11 @@ function dependencies(trace: Trace): ImportRunOrchestratorDependencies {
 const callbacks = () => ({ log: vi.fn(), setProgress: vi.fn(), appendText: vi.fn() })
 
 /** 照导入对话框建的工作流，按运行冻结的阶段表从当前阶段一路跑到完成。 */
-async function runRemainingStages(trace: Trace, owner: string): Promise<void> {
+async function runRemainingStages(trace: Trace, owner: string, runId = RUN_ID): Promise<void> {
   const orchestrator = new ImportRunOrchestrator(dependencies(trace))
-  for (const stage of importStagesFor(ImportRunRepository.get(RUN_ID)!)) {
+  for (const stage of importStagesFor(ImportRunRepository.get(runId)!)) {
     if (stage === 'completed') break
-    await orchestrator.executeStage(RUN_ID, stage, owner, { cancelled: false }, callbacks())
+    await orchestrator.executeStage(runId, stage, owner, { cancelled: false }, callbacks())
   }
 }
 
@@ -275,6 +275,83 @@ describe('勾选反推的作者原稿走完八个阶段', () => {
 })
 
 describe('反推蓝图途中作者自己保存了蓝图', () => {
+  it('finishes the original character sync after restarting a committed blueprint batch', async () => {
+    prepareAuthorRun(true)
+    const trace = newTrace()
+    const sync = vi.spyOn(BlueprintRepository, 'completeCharacterSyncOperation')
+      .mockImplementationOnce(() => { throw new Error('sync interrupted') })
+    await expect(runRemainingStages(trace, 'before-sync-failure')).rejects.toThrow('sync interrupted')
+    const originalOperation = sync.mock.calls[0][0]
+    ImportRunRepository.restart(RUN_ID, 'retry-sync')
+    await runRemainingStages(trace, 'after-sync-failure', 'retry-sync')
+    expect(trace.blueprintCalls).toEqual([[1, 2, 3]])
+    expect(sync).toHaveBeenLastCalledWith(originalOperation)
+    expect(ImportRunRepository.get('retry-sync')?.status).toBe('completed')
+    expect(getProjectDb()!.prepare('SELECT status FROM blueprint_character_sync_operations WHERE operation_id=?')
+      .pluck().get(originalOperation)).toBe('completed')
+  })
+
+  it('restarts only inference after a failed blueprint batch, preserving finalized work and saved blueprints', async () => {
+    BlueprintRepository.upsert({ ...inferredBlueprint(2), title: 'Author blueprint' })
+    prepareAuthorRun(true)
+    const trace = { ...newTrace(), failSecondBlueprintBatchOnce: true }
+    await expect(runRemainingStages(trace, 'before-restart')).rejects.toThrow('第二批蓝图模型调用失败')
+    const db = getProjectDb()!
+    const drafts = db.prepare('SELECT * FROM drafts ORDER BY id').all()
+    const publications = db.prepare('SELECT * FROM finalization_outbox ORDER BY draft_id').all()
+    const saved = BlueprintRepository.getAll()
+    const globalReceipt = ImportRunRepository.getEffectReceipt(RUN_ID, 'global', 'done')
+
+    expect(ImportRunRepository.restart(RUN_ID, 'inference-restart')).toMatchObject({
+      stage: 'blueprints', authorInference: true, rootRunId: RUN_ID, baseRunId: RUN_ID, completedChapters: 3,
+    })
+    expect(ImportRunRepository.get(RUN_ID)?.resumable).toBe(false)
+    expect(prepareAuthorRun(true)).toMatchObject({ classification: 'resumable', run: { id: 'inference-restart' } })
+    // A second restart still proves finalization against the original import.
+    const lease = ImportRunRepository.startOrResume('inference-restart', 'retry').execution
+    ImportRunRepository.fail('inference-restart', 'blueprints', 'provider unavailable', lease)
+    ImportRunRepository.restart('inference-restart', 'inference-restart-2')
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    await runRemainingStages(trace, 'after-restart', 'inference-restart-2')
+
+    expect(ImportRunRepository.get('inference-restart-2')).toMatchObject({ status: 'completed', authorInference: true })
+    expect(trace).toMatchObject({ published: [1, 2, 3], postprocessed: [1, 2, 3], globalCalls: 1, styleCalls: 1,
+      blueprintCalls: [[1], [3], [3]] })
+    expect(getProjectDb()!.prepare('SELECT * FROM drafts ORDER BY id').all()).toEqual(drafts)
+    expect(getProjectDb()!.prepare('SELECT * FROM finalization_outbox ORDER BY draft_id').all()).toEqual(publications)
+    expect(BlueprintRepository.getAll().slice(0, 2)).toEqual(saved)
+    expect(ImportRunRepository.getEffectReceipt(RUN_ID, 'global', 'done')).toEqual(globalReceipt)
+  })
+
+  it('restores a prepared range after an author fills its middle chapter, without generating a new range', async () => {
+    prepareAuthorRun(true)
+    const trace = newTrace()
+    const deps = dependencies(trace)
+    const commit = deps.commitEffectReceipt
+    let interrupted = false
+    deps.commitEffectReceipt = async (...args) => {
+      if (args[1] === 'blueprints' && !interrupted) {
+        interrupted = true
+        throw new Error('interrupted before commit')
+      }
+      return commit(...args)
+    }
+    const orchestrator = new ImportRunOrchestrator(deps)
+    for (const stage of ['author-commit', 'author-publish', 'author-postprocess', 'global', 'style'] as const) {
+      await orchestrator.executeStage(RUN_ID, stage, 'before-crash', { cancelled: false }, callbacks())
+    }
+    await expect(orchestrator.executeStage(RUN_ID, 'blueprints', 'before-crash', { cancelled: false }, callbacks()))
+      .rejects.toThrow('interrupted before commit')
+    BlueprintRepository.upsert({ ...inferredBlueprint(2), title: 'Author filled the gap' })
+    closeProjectDatabase()
+    initProjectDatabase(root)
+    await runRemainingStages(trace, 'after-crash')
+    expect(trace.blueprintCalls).toEqual([[1, 2, 3]])
+    expect(ImportRunRepository.get(RUN_ID)?.status).toBe('completed')
+    expect(BlueprintRepository.getByChapter(2)?.title).toBe('Author filled the gap')
+  })
+
   it('提交时按当时的蓝图只补空：作者在模型调用期间保存的那一章不被反推结果覆盖', async () => {
     prepareAuthorRun(true)
     const trace = newTrace()

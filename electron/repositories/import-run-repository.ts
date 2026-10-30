@@ -10,6 +10,7 @@ import {
   IMPORT_RUN_BLUEPRINT_BATCH_SIZE,
   IMPORT_RUN_KNOWLEDGE_BATCH_SIZE,
   importStagesFor,
+  canRestartAuthorInference,
   parseImportRunChapterBatchCheckpointId,
 } from '../../src/shared/import-run'
 import type {
@@ -710,6 +711,20 @@ function persistedProgress(row: ImportRunRow): {
   }
 }
 
+function startedBlueprintBatches(row: ImportRunRow): string[] {
+  const batches = new Set<string>(completedBatches(row).blueprints ?? [])
+  for (const receipt of db().prepare("SELECT batch_id FROM import_run_receipts WHERE run_id=? AND stage='blueprints'")
+    .all(row.id) as Array<{ batch_id: string }>) batches.add(receipt.batch_id)
+  if (db().prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='generation_runs'").get()) {
+    for (const generation of db().prepare(`SELECT json_extract(binding_json,'$.sourceManifest.importSlot.batchId') AS batch_id
+      FROM generation_runs WHERE json_extract(binding_json,'$.sourceManifest.importSlot.runId')=?
+      AND json_extract(binding_json,'$.sourceManifest.importSlot.stage')='blueprints' ORDER BY rowid`)
+      .all(row.id) as Array<{ batch_id: string }>) batches.add(generation.batch_id)
+  }
+  for (const batch of batches) checkpointChapterNumbers(row, 'blueprints', batch)
+  return [...batches]
+}
+
 function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
   const progress = persistedProgress(row)
   return {
@@ -728,6 +743,7 @@ function rowToSnapshot(row: ImportRunRow): ImportRunSnapshot {
     stage: row.stage,
     status: row.status,
     completedBatches: completedBatches(row),
+    ...(row.stage === 'blueprints' ? { startedBlueprintBatches: startedBlueprintBatches(row) } : {}),
     lastError: row.last_error,
     resumable: row.resumable === 1,
     cancelRequested: row.cancel_requested === 1,
@@ -1343,13 +1359,16 @@ function matchingResumableRun(purpose: ImportPurpose, sourceFingerprint: string,
 }
 
 function hasCommittedAuthorFinalizationReceipt(run: ImportRunRow): boolean {
+  // Inference restarts keep the original finalization and its receipt under the root import.
+  const original = run.root_run_id === run.id ? run : readRunRow(run.root_run_id)
+  if (!original || original.purpose !== 'author-manuscript' || original.manifest_fingerprint !== run.manifest_fingerprint) return false
   const receipt = db().prepare(`
     SELECT * FROM import_run_receipts
     WHERE run_id = ? AND kind = 'author-finalized-batch' AND state = 'committed'
     ORDER BY updated_at DESC, rowid DESC LIMIT 1
-  `).get(run.id) as ImportRunEffectReceiptRow | undefined
+  `).get(original.id) as ImportRunEffectReceiptRow | undefined
   if (!receipt) return false
-  rowToEffectReceipt(receipt, run)
+  rowToEffectReceipt(receipt, original)
   return true
 }
 
@@ -2583,9 +2602,11 @@ export class ImportRunRepository {
       if (!source || !restartable || source.resumable !== 1) {
         throw new Error('IMPORT_RUN_NOT_RESTARTABLE')
       }
-      if (source.purpose === 'author-manuscript') {
+      const authorInference = canRestartAuthorInference({ purpose: source.purpose, stage: source.stage, authorInference: readAuthorInference(source.id) })
+      if (source.purpose === 'author-manuscript' && (!authorInference || !hasCommittedAuthorFinalizationReceipt(source))) {
         throw new Error('IMPORT_RUN_AUTHOR_RESTART_FORBIDDEN')
       }
+      if (authorInference) assertStageCheckpointComplete(readRunRow(source.root_run_id)!, 'author-postprocess')
       if (readRunRow(normalizedNextId)) throw new Error('IMPORT_RUN_ID_CONFLICT')
       const fenced = db().prepare(`
         UPDATE import_runs
@@ -2618,11 +2639,18 @@ export class ImportRunRepository {
         restartStage,
         restartingParsing ? 0 : source.total_chapters,
         restartingParsing ? 0 : source.total_content_size,
-        restartingParsing ? null : source.base_run_id,
+        authorInference ? source.id : restartingParsing ? null : source.base_run_id,
         restartingParsing ? 0 : source.manifest_chapter_count,
         restartingParsing ? 0 : source.manifest_content_size,
         restartingParsing ? 0 : source.manifest_word_count,
       )
+      if (authorInference) {
+        db().prepare(`INSERT INTO import_effect_ledger(
+          run_id,stage,batch_id,effect_namespace,effect_key,state,evidence_kind,diagnostic_code
+        ) VALUES(?,?,?,?,?,'complete','legacy-checkpoint','')`).run(normalizedNextId, AUTHOR_INFERENCE_LEDGER.stage,
+          AUTHOR_INFERENCE_LEDGER.batchId, `import:${source.purpose}:${normalizedNextId}`, AUTHOR_INFERENCE_LEDGER.effectKey)
+        db().prepare('UPDATE import_runs SET completed_chapters=total_chapters WHERE id=?').run(normalizedNextId)
+      }
       if (restartingParsing) {
         db().prepare(`
           INSERT INTO import_run_sources (

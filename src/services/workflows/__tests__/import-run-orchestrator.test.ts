@@ -756,6 +756,17 @@ describe('ImportRunOrchestrator', () => {
     expect(getRun().stage).toBe('refresh')
   })
 
+  it('resumes the original unfinished generation range even when every chapter now has an author blueprint', async () => {
+    const checkpoint = createImportRunChapterBatchCheckpointId([1, 2, 3, 4, 5].map(chapter))
+    const { deps, getRun } = harness(7, { purpose: 'author-manuscript', authorInference: true,
+      stage: 'blueprints', startedBlueprintBatches: [checkpoint] })
+    deps.listBlueprintChapterNumbers = vi.fn(async () => new Set([1, 2, 3, 4, 5]))
+    await new ImportRunOrchestrator(deps).executeStage('run-1', 'blueprints', 'test-runner', { cancelled: false }, callbacks)
+    expect(vi.mocked(deps.inferBlueprints).mock.calls.map(([chapters]) => chapters.map(item => item.number)))
+      .toEqual([[1, 2, 3, 4, 5], [6, 7]])
+    expect(getRun().stage).toBe('refresh')
+  })
+
   it('作者原稿续跑时重放本次运行已提交的蓝图批次，不再调模型，也不把它们当成作者已有的蓝图跳过', async () => {
     const committedBatch = [1, 2, 3, 4, 5].map(chapter)
     const checkpoint = createImportRunChapterBatchCheckpointId(committedBatch)

@@ -539,17 +539,38 @@ export class ImportRunOrchestrator {
   }
 
   /**
-   * 续跑时先按原检查点重放已提交的批次，再对没被它们覆盖的章分批。
+   * 续跑时先恢复已开始的原批次（包括未提交的生成），再对没被它们覆盖的章分批。
    * 蓝图集合在两次运行之间可能变了，重新分批会和旧检查点重叠。
    */
   private async executeBlueprints(run: ImportRunSnapshot, execution: ImportRunExecutionState, context: ImportRunExecutionContext, callbacks: StepCallbacks) {
-    const committed = (run.completedBatches.blueprints ?? []).flatMap(checkpoint => {
+    // A restart keeps existing blueprints, so finish their original post-commit syncs too.
+    const visitedRuns = new Set([run.id])
+    let previousId = run.purpose === 'author-manuscript' ? run.baseRunId : undefined
+    while (previousId && !visitedRuns.has(previousId)) {
+      visitedRuns.add(previousId)
+      const previous = await this.dependencies.getRun(previousId)
+      if (!previous || previous.purpose !== run.purpose || previous.rootRunId !== run.rootRunId) throw new Error('IMPORT_RUN_AUTHOR_RECEIPT_UNBOUND')
+      for (const checkpoint of previous.completedBatches.blueprints ?? []) {
+        stopIfCancelled(context, run.locale)
+        const receipt = await this.dependencies.getEffectReceipt(previous.id, 'blueprints', checkpoint)
+        if (!receipt || receipt.state !== 'committed') throw new Error('IMPORT_RUN_RECEIPT_REQUIRED')
+        await this.withLeaseHeartbeat(run, execution, () => this.dependencies.replayCommittedEffect(receipt, previous))
+      }
+      previousId = previous.baseRunId
+    }
+    const started = [...new Set([...(run.completedBatches.blueprints ?? []), ...(run.startedBlueprintBatches ?? [])])].flatMap(checkpoint => {
       const range = parseImportRunChapterBatchCheckpointId(checkpoint)
       return range ? [{ checkpoint, range }] : []
     })
     let visited = 0
-    for (const { checkpoint, range } of committed) {
-      const replayed = await this.replayCheckpointedEffect(run, execution, 'blueprints', checkpoint)
+    for (const { checkpoint, range } of started) {
+      stopIfCancelled(context, run.locale)
+      const batch = await this.dependencies.listChapters(run.id, range.startChapter - 1, range.endChapter - range.startChapter + 1)
+      if (createImportRunChapterBatchCheckpointId(batch) !== checkpoint) throw new Error('IMPORT_RUN_BATCH_ID_INVALID')
+      const replayed = run.completedBatches.blueprints?.includes(checkpoint)
+        ? await this.replayCheckpointedEffect(run, execution, 'blueprints', checkpoint)
+        : await this.executeDurableEffect(run, execution, 'blueprints', checkpoint, `blueprints:${checkpoint}`,
+          'chapter-blueprint-range', commit => this.dependencies.inferBlueprints(batch, checkpoint, run, commit))
       run = replayed.run
       execution.current = replayed.execution
       visited += range.endChapter - range.startChapter + 1
@@ -557,7 +578,7 @@ export class ImportRunOrchestrator {
       stopIfCancelled(context, run.locale)
     }
     const needsBlueprint = await this.blueprintChapterFilter(run)
-    const uncommitted = (chapter: ImportRunChapterSnapshot) => !committed
+    const uncommitted = (chapter: ImportRunChapterSnapshot) => !started
       .some(({ range }) => range.startChapter <= chapter.number && chapter.number <= range.endChapter)
     let after = 0
     let page = await this.dependencies.listChapters(run.id, after, IMPORT_CHAPTER_PAGE_SIZE)

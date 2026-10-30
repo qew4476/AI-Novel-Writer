@@ -793,6 +793,29 @@ describe('作者原稿反推的建议', () => {
     await vi.waitFor(() => expect(list()).toBeNull())
   })
 
+  it('keeps earlier suggestions across repeated inference restarts and prefers the newest committed stage', async () => {
+    arrange({ genre: '武侠', writingStyle: '长句' }, {})
+    const fallback = invoke.getMockImplementation()!
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-get') return { purpose: 'author-manuscript', authorInference: true,
+        baseRunId: args[0] === '导入运行' ? 'first-retry' : args[0] === 'first-retry' ? 'original' : undefined }
+      if (channel === 'db:import-run-effect-receipt-get') {
+        const [id, stage] = args
+        if (id === 'first-retry' && stage === 'style') return { state: 'committed', effectReceipt: { mode: 'fill-empty',
+          suggestions: [{ field: 'writingStyle', current: '长句', inferred: '新文风' }] } }
+        if (id === 'original') return { state: 'committed', effectReceipt: { mode: 'fill-empty', suggestions: stage === 'global'
+          ? [{ field: 'genre', current: '武侠', inferred: '悬疑' }] : [{ field: 'writingStyle', current: '长句', inferred: '旧文风' }] } }
+        return null
+      }
+      return fallback(channel, ...args)
+    })
+    useWorkflowStore.setState({ history: [importRun()] })
+    await render({ kind: 'run', tab: 'history', runId: '导入运行' })
+    await vi.waitFor(() => expect(host!.querySelector('[aria-label="反推建议"]')?.textContent).toContain('悬疑'))
+    expect(host!.querySelector('[aria-label="反推建议"]')?.textContent).toContain('新文风')
+    expect(host!.querySelector('[aria-label="反推建议"]')?.textContent).not.toContain('旧文风')
+  })
+
   it('采用一条建议只改那一项；设定页里还没保存的其他改动保留', async () => {
     const core = { genre: '武侠', coreOutline: '作者自己的大纲' }
     const updates = arrange(core, {

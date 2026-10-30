@@ -48,6 +48,11 @@ export function importStagesFor(run: { purpose: ImportPurpose; authorInference?:
   return run.authorInference ? IMPORT_STAGE_PLANS.authorWithInference : IMPORT_STAGE_PLANS.author
 }
 
+export function canRestartAuthorInference(run: { purpose: ImportPurpose; authorInference?: boolean; stage: ImportRunStage }): boolean {
+  return run.purpose === 'author-manuscript' && run.authorInference === true
+    && ['global', 'style', 'blueprints'].includes(run.stage)
+}
+
 export type ImportRunDirectCheckpointStage =
   | 'knowledge'
   | 'author-publish'
@@ -334,6 +339,8 @@ export interface ImportRunSnapshot {
   stage: ImportRunStage
   status: ImportRunStatus
   completedBatches: Partial<Record<ImportRunStage, string[]>>
+  /** Original ranges with a generation run or prepared receipt, including unfinished batches. */
+  startedBlueprintBatches?: string[]
   lastError: string
   resumable: boolean
   cancelRequested: boolean

@@ -12,7 +12,7 @@ import type {
   ImportRunPrepareFromInspectionRequest,
   ImportRunSnapshot,
 } from '../../shared/import-run'
-import { AUTHOR_IMPORT_PREVIEW_STALE } from '../../shared/import-run'
+import { AUTHOR_IMPORT_PREVIEW_STALE, canRestartAuthorInference } from '../../shared/import-run'
 import type { AuthorManuscriptImportPreview } from '../../shared/author-manuscript-import'
 import {
   createImportWorkflow,
@@ -91,7 +91,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
     ? activeWorkflows.some(workflow => workflow.id === resumableRun.id)
     : false
   const resumableRunCanRestart = resumableRun
-    ? resumableRun.purpose !== 'author-manuscript'
+    ? (resumableRun.purpose !== 'author-manuscript' || canRestartAuthorInference(resumableRun))
       && ['failed', 'cancelled', 'running'].includes(resumableRun.status)
     : false
   const runProgress = (run: ImportRunSnapshot) => ({
@@ -715,7 +715,10 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                   style={{ color: 'var(--color-text-secondary)' }}
                   data-testid="author-import-continue-guidance"
                 >
-                  {text(
+                  {canRestartAuthorInference(resumableRun) ? text(
+                    '反推失败后可重新开始当前反推阶段。已保存的正文、连续性更新和蓝图会保留。',
+                    'Restart the current inference stage after a failure. Saved manuscript text, continuity updates, and blueprints are kept.',
+                  ) : text(
                     '权威定稿已绑定当前运行，请继续同一导入完成发布与连续性更新。',
                     'The finalized manuscript is bound to this run. Continue the same import to finish publication and continuity updates.',
                   )}
@@ -728,7 +731,7 @@ export default function ImportNovelDialog({ open, onClose }: ImportNovelDialogPr
                 {resumableRunCanRestart && (
                   <Button type="button" size="sm" variant="outline" onClick={handleRestart} disabled={importing || resumableRunIsActive}>
                     <RotateCcw size={13} />
-                    {text('重新开始', 'Start over')}
+                    {resumableRun.purpose === 'author-manuscript' ? text('重新开始反推', 'Restart inference') : text('重新开始', 'Start over')}
                   </Button>
                 )}
               </div>

@@ -2,6 +2,7 @@ import type { ProjectSessionContext } from '../../shared/ipc-channels'
 import type { NovelConfig } from '../../shared/ipc-channels'
 import type { ProjectCoreData } from '../../../electron/repositories/project-core-repository'
 import type { ImportFillField, ImportFillSuggestion } from '../../shared/import-fill-empty'
+import type { ImportRunEffectReceipt, ImportRunSnapshot } from '../../shared/import-run'
 import { ipc } from '../ipc-client'
 import { useProjectStore } from '../../stores/project-store'
 import { useEditorStore } from '../../stores/editor-store'
@@ -27,10 +28,22 @@ export async function loadPendingImportSuggestions(
   session: ProjectSessionContext,
   projectPath: string,
 ): Promise<ImportFillSuggestion[]> {
-  const receipts = await Promise.all(SUGGESTION_STAGES.map(stage => ipc.invokeWithProjectSession(
-    session, 'db:import-run-effect-receipt-get', runId, stage, 'done', projectPath,
-  )))
-  const suggestions = receipts.flatMap(receipt => receipt?.state === 'committed' ? suggestionsOf(receipt.effectReceipt) : [])
+  const receipts = new Map<string, ImportRunEffectReceipt>()
+  const visited = new Set<string>()
+  let currentRunId: string | undefined = runId
+  // Inference restarts leave earlier committed suggestions on their original run.
+  while (currentRunId && !visited.has(currentRunId)) {
+    visited.add(currentRunId)
+    const missing = SUGGESTION_STAGES.filter(stage => !receipts.has(stage))
+    const loaded = await Promise.all(missing.map(stage => ipc.invokeWithProjectSession(
+      session, 'db:import-run-effect-receipt-get', currentRunId!, stage, 'done', projectPath,
+    )))
+    loaded.forEach((receipt, index) => { if (receipt?.state === 'committed') receipts.set(missing[index], receipt) })
+    if (receipts.size === SUGGESTION_STAGES.length) break
+    const run: ImportRunSnapshot | null = await ipc.invokeWithProjectSession(session, 'db:import-run-get', currentRunId, projectPath)
+    currentRunId = run?.purpose === 'author-manuscript' && run.authorInference ? run.baseRunId : undefined
+  }
+  const suggestions = SUGGESTION_STAGES.flatMap(stage => suggestionsOf(receipts.get(stage)?.effectReceipt))
   if (suggestions.length === 0) return []
   const core = await ipc.invokeWithProjectSession(session, 'db:project-core-get', projectPath)
   if (!core) return []

@@ -11,6 +11,8 @@ import { readMainGenerationPolicy } from '../main-generation-plan'
 import { buildGenerationSourceBinding, rebuildGenerationSourceBinding } from '../generation-source-binding'
 import { getProjectDb, getCurrentProjectPath } from '../../database'
 import { ImportRunRepository } from '../../repositories/import-run-repository'
+import { FinalizedDraftImportRepository } from '../../repositories/finalized-draft-import-repository'
+import { countDraftUnits } from '../../../src/shared/draft-units'
 import { generationOutputContract, type BeginGenerationRequest } from '../../../src/shared/generation-owner-contract'
 import { createImportRunChapterBatchCheckpointId, type ImportRunChapterSnapshot } from '../../../src/shared/import-run'
 import { planBlueprintGenerationCost } from '../../../src/services/workflows/blueprint-batch-policy'
@@ -38,7 +40,7 @@ function expectedImportRootBudget(chapterCount: number) {
   return { maxPhysicalRequests: requests, maxActiveElapsedMs: 3_600_000 / 32 * requests }
 }
 
-function fixture(chapterCount: number, dispatch: GenerationRunServiceDependencies['dispatch'] = stop) {
+function fixture(chapterCount: number, dispatch: GenerationRunServiceDependencies['dispatch'] = stop, authorInference = false) {
   const base = path.resolve('.runtime/.cache/novel-quality-modernization/import-budget-tests')
   fs.mkdirSync(base, { recursive: true })
   const root = fs.mkdtempSync(path.join(base, 'owner-'))
@@ -57,8 +59,24 @@ function fixture(chapterCount: number, dispatch: GenerationRunServiceDependencie
     rebuildBinding: (previous, modelReceipt) => rebuildGenerationSourceBinding(deps, previous, epoch, modelReceipt, readMainGenerationPolicy(previous.sourceManifest.policy)).binding })
   cleanup.push(() => { owner.suspendForProjectClose(); db.close(); fs.rmSync(root, { recursive: true, force: true }) })
   const chapters = Array.from({ length: chapterCount }, (_, index) => chapter(index + 1))
-  ImportRunRepository.prepare({ runId: '长篇导入', purpose: 'reference', sourceFingerprint: 'a'.repeat(64), locale: 'zh-CN', sourceDisplay: [{ displayName: '参考小说.txt', mediaType: 'text/plain', size: 1 }], chapters })
-  db.prepare("UPDATE import_runs SET stage='global' WHERE id='长篇导入'").run()
+  const preview = authorInference ? FinalizedDraftImportRepository.preview(chapters.map(item => ({
+    chapterNumber: item.number, title: item.title, content: item.content, wordCount: countDraftUnits(item.content),
+  }))) : undefined
+  ImportRunRepository.prepare({ runId: '长篇导入', purpose: authorInference ? 'author-manuscript' : 'reference',
+    sourceFingerprint: 'a'.repeat(64), locale: 'zh-CN', sourceDisplay: [{ displayName: '参考小说.txt', mediaType: 'text/plain', size: 1 }], chapters,
+    ...(preview ? { authorInference, authorityFingerprint: preview.authorityFingerprint, expectedManifestFingerprint: preview.manifestFingerprint } : {}) })
+  if (preview) {
+    const execution = ImportRunRepository.startOrResume('长篇导入', '合成执行器').execution
+    ImportRunRepository.prepareEffectReceipt({ runId: '长篇导入', stage: 'author-commit', batchId: 'done', effectKey: 'author-finalized-batch',
+      kind: 'author-finalized-batch', payload: { operationId: 'author-import:长篇导入', runId: '长篇导入', authorityFingerprint: preview.authorityFingerprint,
+        manifestFingerprint: preview.manifestFingerprint } }, execution)
+    ImportRunRepository.commitEffectReceipt('长篇导入', 'author-commit', 'done', execution)
+    ImportRunRepository.advanceStage('长篇导入', 'author-commit', 'author-publish', execution)
+    for (const [stage, next] of [['author-publish', 'author-postprocess'], ['author-postprocess', 'global']] as const) {
+      for (const item of chapters) ImportRunRepository.completeBatch('长篇导入', stage, `chapter:${item.number}`, execution)
+      ImportRunRepository.advanceStage('长篇导入', stage, next, execution)
+    }
+  } else db.prepare("UPDATE import_runs SET stage='global' WHERE id='长篇导入'").run()
   return { db, owner, spy, chapters }
 }
 type Fixture = ReturnType<typeof fixture>
@@ -111,6 +129,55 @@ async function runBlueprints(f: Fixture, chapters: readonly ImportRunChapterSnap
 }
 
 const rootBudget = (f: Fixture, rootActionId: string) => JSON.parse(f.db.prepare('SELECT budget_json FROM generation_roots WHERE root_action_id=?').pluck().get(rootActionId) as string) as Record<string, number>
+
+it.each(['global', 'style', 'blueprints'] as const)('author inference can restart a persisted %s failure with a new generation root', async stage => {
+  let fail = false
+  const f = fixture(3, async (...args) => {
+    if (fail) throw new Error('fetch failed')
+    return stop(...args)
+  }, true)
+  if (stage !== 'global') await runGlobal(f)
+  if (stage === 'blueprints') await runStyle(f)
+  const drafts = f.db.prepare('SELECT * FROM drafts ORDER BY id').all()
+  const execution = ImportRunRepository.startOrResume('长篇导入', '合成执行器').execution
+  const slot = { runId: '长篇导入', stage, batchId: stage === 'blueprints' ? createImportRunChapterBatchCheckpointId(f.chapters) : 'done' }
+  const { handle } = f.owner.begin({ ...stageSelection[stage], uiActionNonce: 'failed-inference', modelId: model.id,
+    selectedDraftIds: [], selectedFinalizedDraftIds: [], importSlot: slot, importExecution: execution } as BeginGenerationRequest)
+  const request = { execution, handle, ordinal: 0, task: { purpose: `import-${stage}`, output: stageSelection[stage].output,
+    messages: [{ role: 'user' as const, content: 'Infer manuscript' }] } }
+  fail = true
+  expect((await f.owner.executeImportGeneration(request)).outcome.status).not.toBe('completed')
+  const calls = f.spy.mock.calls.length
+  expect((await f.owner.executeImportGeneration(request)).outcome.status).not.toBe('completed')
+  expect(f.spy).toHaveBeenCalledTimes(calls)
+  ImportRunRepository.fail('长篇导入', stage, 'fetch failed', execution)
+  expect(ImportRunRepository.restart('长篇导入', 'inference-retry')).toMatchObject({ stage, authorInference: true })
+  fail = false
+  if (stage === 'global') await runGlobal(f, 'inference-retry')
+  if (stage !== 'blueprints') await runStyle(f, 'inference-retry')
+  const [next] = await runBlueprints(f, f.chapters, 'inference-retry')
+  expect(next.rootActionId).not.toBe(handle.rootActionId)
+  expect(f.db.prepare('SELECT * FROM drafts ORDER BY id').all()).toEqual(drafts)
+  expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(3)
+})
+
+it('publishes unfinished generation ranges so resume keeps their slot after an author fills a chapter', async () => {
+  const f = fixture(5, stop, true)
+  await runGlobal(f)
+  await runStyle(f)
+  const execution = ImportRunRepository.startOrResume('长篇导入', '合成执行器').execution
+  const batchId = createImportRunChapterBatchCheckpointId(f.chapters)
+  const selection = { ...stageSelection.blueprints, uiActionNonce: 'original-range', modelId: model.id,
+    selectedDraftIds: [], selectedFinalizedDraftIds: [], importSlot: { runId: '长篇导入', stage: 'blueprints', batchId },
+    importExecution: execution } as BeginGenerationRequest
+  const { handle } = f.owner.begin(selection)
+  f.db.exec("INSERT INTO blueprints(chapter_number,title) VALUES(3,'Author saved')")
+  expect(ImportRunRepository.get('长篇导入')).toMatchObject({ startedBlueprintBatches: [batchId], completedBatches: { style: ['done'] } })
+  const [resumed] = await runBlueprints(f, f.chapters)
+  expect(resumed).toEqual(handle)
+  expect(f.db.prepare('SELECT title FROM blueprints WHERE chapter_number=3').pluck().get()).toBe('Author saved')
+  expect(f.db.prepare('SELECT COUNT(*) FROM blueprints').pluck().get()).toBe(5)
+})
 
 it('160 章参考小说导入：global、style 与全部 32 批蓝图共用的根按整个导入运行的工作量定额，一次跑完', async () => {
   const f = fixture(160)

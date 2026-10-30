@@ -875,6 +875,30 @@ describe('current-project reference import', () => {
     expect(invoke.mock.calls.some(([channel]) => channel === 'db:import-run-restart')).toBe(false)
   })
 
+  it.each(['global', 'style', 'blueprints'] as const)('offers an inference-only restart for a failed author %s stage', async stage => {
+    const resumable = importRun({ id: 'failed-inference', purpose: 'author-manuscript', authorInference: true,
+      effectNamespace: 'import:author-manuscript:failed-inference', stage, status: 'failed', lastError: 'fetch failed' })
+    const restarted = { ...resumable, id: 'restarted-inference', status: 'ready' as const, lastError: '',
+      effectNamespace: 'import:author-manuscript:restarted-inference' }
+    durableAuthorChapters[restarted.id] = [1]
+    invoke.mockImplementation(async (channel: string, ...args: unknown[]) => {
+      if (channel === 'db:import-run-list-resumable') return [resumable]
+      if (channel === 'db:import-run-restart') return { success: true, run: restarted }
+      if (channel === 'db:import-run-list-chapters') return durableAuthorChapterPage(args)
+      if (channel === 'db:project-core-get') return null
+      if (channel === 'db:blueprint-get-all') return []
+      return { success: true }
+    })
+    await act(async () => useProjectStore.setState({ currentProject: { ...project } as never }))
+    await act(async () => page.getByTestId('import-target-current').click())
+    await act(async () => page.getByTestId('import-purpose-author').click())
+    await expect.element(page.getByTestId('author-import-continue-guidance')).toHaveTextContent('已保存的正文、连续性更新和蓝图会保留')
+    await act(async () => page.getByRole('button', { name: '重新开始反推' }).click())
+    expect(invoke.mock.calls.find(([channel]) => channel === 'db:import-run-restart')?.[1]).toBe(resumable.id)
+    expect(startWorkflow).toHaveBeenCalledOnce()
+    expect(startWorkflow.mock.calls[0][0]).toMatchObject({ runId: restarted.id })
+  })
+
   it('continues a prepared snapshot without asking for the moved source file again', async () => {
     const prepared = importRun({
       id: 'prepared-after-move',
